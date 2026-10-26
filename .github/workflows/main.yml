@@ -23,13 +23,13 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate & Build 4everTube 2027 Stable
+      - name: Generate & Build 4everTube 2027 Pro Ultra
         run: |
           flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
           cd app_project
           flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1 open_filex:^4.5.0
           
-          # Android Native MainActivity with Share Listener
+          # Native Android Kotlin MainActivity
           cat << 'EOF' > android/app/src/main/kotlin/com/technology4ever/forevertube2027/MainActivity.kt
           package com.technology4ever.forevertube2027
 
@@ -115,7 +115,7 @@ jobs:
           </manifest>
           EOF
 
-          # Clean 100% Functional App
+          # Complete Flutter App
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:io';
@@ -175,11 +175,10 @@ jobs:
           class _ForeverTubeMasterAppState extends State<ForeverTubeMasterApp> with SingleTickerProviderStateMixin, WidgetsBindingObserver {
             late TabController _tabController;
             final TextEditingController _urlController = TextEditingController();
-            final YoutubeExplode _yt = YoutubeExplode();
             static const platformChannel = MethodChannel('com.technology4ever.forevertube2027/share');
 
             bool _isLoading = false;
-            String _statusText = "YouTube Video ya Shorts ka link paste karein";
+            String _statusText = "Link paste karein ya kisi app se 'Share' karein";
             final List<DownloadTask> _activeDownloads = [];
             List<FileSystemEntity> _downloadedFiles = [];
 
@@ -265,12 +264,13 @@ jobs:
               return true;
             }
 
+            // Fresh client for every request to prevent freezing
             Future<void> _fetchMedia() async {
               final raw = _urlController.text.trim();
               final url = _cleanLink(raw) ?? raw;
 
               if (url.isEmpty) {
-                _showSnack("Link paste karein!");
+                _showSnack("Pehle koi valid link paste karein!");
                 return;
               }
 
@@ -279,34 +279,38 @@ jobs:
                 _statusText = "Video details analyze ho rahi hain...";
               });
 
+              final yt = YoutubeExplode();
               try {
-                final video = await _yt.videos.get(url);
-                final manifest = await _yt.videos.streamsClient.getManifest(video.id);
+                final video = await yt.videos.get(url);
+                final manifest = await yt.videos.streamsClient.getManifest(video.id);
 
                 setState(() {
                   _isLoading = false;
-                  _statusText = "Ready! Format select karein.";
+                  _statusText = "Formats taiyar hain! Quality select karein.";
                 });
 
                 _openDownloadSheet(video, manifest);
               } catch (e) {
                 setState(() {
                   _isLoading = false;
-                  _statusText = "Link read nahi hua. Check karein link sahi hai?";
+                  _statusText = "Link load nahi hua. Dobara try karein.";
                 });
-                _showSnack("Error: Link load nahi ho saka ($e)");
+                _showSnack("Error: $e");
+              } finally {
+                yt.close();
               }
             }
 
             void _startNewDownload({
+              required String videoId,
+              required StreamInfo streamInfo,
               required String title,
               required String thumbnail,
               required String type,
               required String fileName,
-              required Stream<List<int>> stream,
-              required int totalBytes,
             }) async {
               Navigator.pop(context);
+              _urlController.clear();
               await _requestPermissions();
 
               final dir = await _getDownloadFolder();
@@ -328,12 +332,16 @@ jobs:
 
               setState(() {
                 _activeDownloads.insert(0, task);
-                _statusText = "Download jari hai...";
+                _statusText = "Downloading shuru ho gayi!";
               });
 
+              final ytDownloader = YoutubeExplode();
+
               try {
+                final stream = ytDownloader.videos.streamsClient.get(streamInfo);
                 var output = file.openWrite(mode: FileMode.writeOnly);
                 int received = 0;
+                int totalBytes = streamInfo.size.totalBytes;
                 final stopwatch = Stopwatch()..start();
                 int lastBytes = 0;
                 int lastTime = 0;
@@ -345,6 +353,7 @@ jobs:
                     setState(() {
                       _activeDownloads.remove(task);
                     });
+                    ytDownloader.close();
                     return;
                   }
 
@@ -386,7 +395,7 @@ jobs:
                   task.eta = "0s";
                 });
 
-                _showSnack("'$title' Saved in 4everTube Folder!");
+                _showSnack("'$title' Saved!");
                 _loadDownloadedFiles();
               } catch (e) {
                 setState(() {
@@ -394,13 +403,15 @@ jobs:
                   task.eta = "Failed";
                 });
                 _showSnack("Download ruk gaya: $e");
+              } finally {
+                ytDownloader.close();
               }
             }
 
             void _openDownloadSheet(Video video, StreamManifest manifest) {
-              // Muxed streams have BOTH Video AND Audio (No FFmpeg needed, guaranteed to play with sound)
-              final muxedStreams = manifest.muxed.sortByVideoQuality();
-              // Pure audio stream for MP3
+              // Get all available video qualities (including 1080p, 1440p, 4K)
+              final allVideoStreams = manifest.video.sortByVideoQuality();
+              // Get clean audio streams
               final audioStreams = manifest.audioOnly.sortByBitrate();
 
               showModalBottomSheet(
@@ -412,7 +423,7 @@ jobs:
                 ),
                 builder: (context) {
                   return Container(
-                    height: MediaQuery.of(context).size.height * 0.75,
+                    height: MediaQuery.of(context).size.height * 0.80,
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -451,31 +462,31 @@ jobs:
                         Expanded(
                           child: ListView(
                             children: [
-                              const Text("🎬 Video (With Audio - 100% Playable)",
+                              const Text("🎬 Video Formats (4K, 2K, 1080p, 720p, 480p, 360p)",
                                   style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 15)),
                               const SizedBox(height: 10),
-                              ...muxedStreams.map((v) {
+                              ...allVideoStreams.map((v) {
                                 final quality = v.videoQualityLabel;
                                 final mb = (v.size.totalBytes / (1024 * 1024)).toStringAsFixed(1);
+                                String badge = quality.contains("2160") ? "4K Ultra HD" : quality.contains("1440") ? "2K QHD" : quality.contains("1080") ? "FHD" : quality.contains("720") ? "HD" : "SD";
                                 return Card(
                                   color: const Color(0xFF0F172A),
                                   child: ListTile(
                                     leading: const Icon(Icons.video_collection, color: Color(0xFFF59E0B)),
-                                    title: Text("$quality Video", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                    subtitle: Text("Size: $mb MB • MP4 (Sound OK)", style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                    title: Text("$quality Video ($badge)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    subtitle: Text("Size: $mb MB • ${v.container.name.toUpperCase()}", style: const TextStyle(color: Colors.white60, fontSize: 12)),
                                     trailing: const Icon(Icons.download_for_offline, color: Color(0xFF10B981), size: 28),
                                     onTap: () {
                                       String safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
                                       if (safeTitle.length > 30) safeTitle = safeTitle.substring(0, 30);
-                                      String fileName = "${safeTitle}_$quality.mp4";
-                                      var stream = _yt.videos.streamsClient.get(v);
+                                      String fileName = "${safeTitle}_$quality.${v.container.name}";
                                       _startNewDownload(
+                                        videoId: video.id.value,
+                                        streamInfo: v,
                                         title: video.title,
                                         thumbnail: video.thumbnails.lowResUrl,
                                         type: "Video ($quality)",
                                         fileName: fileName,
-                                        stream: stream,
-                                        totalBytes: v.size.totalBytes,
                                       );
                                     },
                                   ),
@@ -483,7 +494,7 @@ jobs:
                               }).toList(),
 
                               const SizedBox(height: 16),
-                              const Text("🎵 Audio / MP3 (Direct Sound)",
+                              const Text("🎵 MP3 Audio (Original Sound)",
                                   style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 15)),
                               const SizedBox(height: 10),
                               ...audioStreams.take(2).map((a) {
@@ -493,21 +504,20 @@ jobs:
                                   color: const Color(0xFF0F172A),
                                   child: ListTile(
                                     leading: const Icon(Icons.music_note, color: Color(0xFF10B981)),
-                                    title: Text("$kbps kbps Clean Audio", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                    subtitle: Text("Size: $mb MB • MP3/M4A", style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                    title: Text("$kbps kbps MP3 Audio", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    subtitle: Text("Size: $mb MB • Audio File", style: const TextStyle(color: Colors.white60, fontSize: 12)),
                                     trailing: const Icon(Icons.download_for_offline, color: Color(0xFF10B981), size: 28),
                                     onTap: () {
                                       String safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
                                       if (safeTitle.length > 30) safeTitle = safeTitle.substring(0, 30);
                                       String fileName = "${safeTitle}_${kbps}k.mp3";
-                                      var stream = _yt.videos.streamsClient.get(a);
                                       _startNewDownload(
+                                        videoId: video.id.value,
+                                        streamInfo: a,
                                         title: video.title,
                                         thumbnail: video.thumbnails.lowResUrl,
                                         type: "MP3 Audio",
                                         fileName: fileName,
-                                        stream: stream,
-                                        totalBytes: a.size.totalBytes,
                                       );
                                     },
                                   ),
@@ -531,7 +541,6 @@ jobs:
             void dispose() {
               WidgetsBinding.instance.removeObserver(this);
               _tabController.dispose();
-              _yt.close();
               _urlController.dispose();
               super.dispose();
             }
@@ -547,7 +556,7 @@ jobs:
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: const [
                       Text("4everTube 2027 Pro", style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 18)),
-                      Text("Direct High-Speed Downloader", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                      Text("4K Ultra HD & Multi-Queue Engine", style: TextStyle(color: Colors.white54, fontSize: 11)),
                     ],
                   ),
                   bottom: TabBar(
@@ -569,6 +578,7 @@ jobs:
                 body: TabBarView(
                   controller: _tabController,
                   children: [
+                    // Tab 1: Downloader View
                     Padding(
                       padding: const EdgeInsets.all(14.0),
                       child: Column(
@@ -599,8 +609,8 @@ jobs:
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               ),
                               onPressed: _isLoading ? null : () => _fetchMedia(),
-                              icon: const Icon(Icons.download),
-                              label: Text(_isLoading ? "Checking Video..." : "Get Video / MP3 Formats",
+                              icon: const Icon(Icons.search),
+                              label: Text(_isLoading ? "Analyzing All Formats..." : "Get 4K / HD / MP3 Formats",
                                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                             ),
                           ),
@@ -723,6 +733,7 @@ jobs:
                       ),
                     ),
 
+                    // Tab 2: Saved Downloads View
                     RefreshIndicator(
                       onRefresh: _loadDownloadedFiles,
                       child: _downloadedFiles.isEmpty
@@ -735,7 +746,7 @@ jobs:
                                 final file = File(_downloadedFiles[index].path);
                                 final name = file.path.split('/').last;
                                 final sizeMB = (file.lengthSync() / (1024 * 1024)).toStringAsFixed(1);
-                                final isVideo = name.endsWith('.mp4');
+                                final isVideo = name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.webm');
 
                                 return Card(
                                   color: const Color(0xFF1E293B),
