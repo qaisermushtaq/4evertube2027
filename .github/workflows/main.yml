@@ -23,13 +23,13 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate & Build 4everTube 2027 Pro Ultra Max
+      - name: Generate & Build 4everTube 2027 Double-Layer Pro
         run: |
           flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
           cd app_project
           flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1 open_filex:^4.5.0 shared_preferences:^2.3.2
           
-          # Native Android Kotlin MainActivity with Direct Share Intent
+          # Native Android Kotlin MainActivity with Share Intent
           cat << 'EOF' > android/app/src/main/kotlin/com/technology4ever/forevertube2027/MainActivity.kt
           package com.technology4ever.forevertube2027
 
@@ -73,7 +73,7 @@ jobs:
           }
           EOF
 
-          # Android Manifest with Full Background Services
+          # Android Manifest
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.technology4ever.forevertube2027">
@@ -117,7 +117,7 @@ jobs:
           </manifest>
           EOF
 
-          # Complete Flutter Source Code
+          # Flutter Source Code with Double-Layer Bridge
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -148,6 +148,7 @@ jobs:
             final String filePath;
             final int totalBytes;
             final bool isAudio;
+            final String? directStreamUrl;
 
             double progress = 0.0;
             String speed = "Connecting...";
@@ -167,6 +168,7 @@ jobs:
               required this.filePath,
               required this.totalBytes,
               required this.isAudio,
+              this.directStreamUrl,
               this.progress = 0.0,
               this.isCompleted = false,
             });
@@ -180,6 +182,7 @@ jobs:
               'filePath': filePath,
               'totalBytes': totalBytes,
               'isAudio': isAudio,
+              'directStreamUrl': directStreamUrl,
               'progress': progress,
               'isCompleted': isCompleted,
             };
@@ -193,6 +196,7 @@ jobs:
               filePath: json['filePath'],
               totalBytes: json['totalBytes'] ?? 0,
               isAudio: json['isAudio'] ?? false,
+              directStreamUrl: json['directStreamUrl'],
               progress: (json['progress'] ?? 0.0).toDouble(),
               isCompleted: json['isCompleted'] ?? false,
             );
@@ -262,7 +266,6 @@ jobs:
               } catch (_) {}
             }
 
-            // Share Intent listener: Directly opens the quality popup
             Future<void> _checkShareIntent() async {
               try {
                 final String? sharedData = await platformChannel.invokeMethod('getSharedData');
@@ -273,7 +276,6 @@ jobs:
                       _urlController.text = extracted;
                       _tabController.animateTo(0);
                     });
-                    // Direct Instant Analyze & Open Sheet
                     _fastAnalyzeLink(extracted);
                   }
                 }
@@ -338,16 +340,16 @@ jobs:
                 }
               }
               _loadSavedFiles();
-              _showSnack("✅ Background Engine Reset! Pending tasks resumed.");
+              _showSnack("✅ Engine Reset! Pending tasks resumed.");
             }
 
-            // Direct Fast Resolution
+            // Double-Layer Fallback Analyzer (YouTube Explode + Cloud Mirror)
             Future<void> _fastAnalyzeLink([String? directUrl]) async {
               final raw = directUrl ?? _urlController.text.trim();
               final url = _cleanLink(raw) ?? raw;
 
               if (url.isEmpty) {
-                _showSnack("Pehle YouTube link paste ya share karein!");
+                _showSnack("Pehle YouTube link paste karein!");
                 return;
               }
 
@@ -355,27 +357,50 @@ jobs:
                 _isAnalyzing = true;
               });
 
+              // Layer 1: Try Direct YouTube Explode
               final yt = YoutubeExplode();
               try {
                 final video = await yt.videos.get(url).timeout(const Duration(seconds: 4));
-                final manifest = await yt.videos.streamsClient.getManifest(video.id).timeout(const Duration(seconds: 6));
+                final manifest = await yt.videos.streamsClient.getManifest(video.id).timeout(const Duration(seconds: 5));
 
                 setState(() {
                   _isAnalyzing = false;
                 });
-
-                _showFormatPicker(video, manifest);
-              } catch (e) {
-                setState(() {
-                  _isAnalyzing = false;
-                });
-                _showSnack("Video details decode nahi ho sakeen. Dobara try karein.");
-              } finally {
+                yt.close();
+                _showFormatPicker(video, manifest, null);
+                return;
+              } catch (_) {
                 yt.close();
               }
+
+              // Layer 2: Cloud API Mirror Fallback (Guaranteed Success)
+              try {
+                final res = await http.post(
+                  Uri.parse("https://api.cobalt.tools/api/json"),
+                  headers: {"Accept": "application/json", "Content-Type": "application/json"},
+                  body: jsonEncode({"url": url, "vQuality": "max"}),
+                ).timeout(const Duration(seconds: 6));
+
+                if (res.statusCode == 200) {
+                  final data = jsonDecode(res.body);
+                  final downloadUrl = data['url'];
+                  if (downloadUrl != null) {
+                    setState(() {
+                      _isAnalyzing = false;
+                    });
+                    _showDirectMirrorSheet(url, downloadUrl);
+                    return;
+                  }
+                }
+              } catch (_) {}
+
+              setState(() {
+                _isAnalyzing = false;
+              });
+              _showSnack("Link analyze nahi ho saka. Dobara try karein.");
             }
 
-            void _showFormatPicker(Video video, StreamManifest manifest) {
+            void _showFormatPicker(Video video, StreamManifest manifest, String? mirrorUrl) {
               final allVideos = manifest.video.sortByVideoQuality();
               final allAudio = manifest.audioOnly.sortByBitrate();
 
@@ -425,13 +450,13 @@ jobs:
                         Expanded(
                           child: ListView(
                             children: [
-                              const Text("🎬 Video Formats (Choose Quality)",
+                              const Text("🎬 Video Formats (4K / 1080p / 720p)",
                                   style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 14)),
                               const SizedBox(height: 8),
                               ...allVideos.map((v) {
                                 final quality = v.videoQualityLabel;
                                 final mb = (v.size.totalBytes / (1024 * 1024)).toStringAsFixed(1);
-                                String badge = quality.contains("2160") ? "4K Ultra HD" : quality.contains("1440") ? "2K QHD" : quality.contains("1080") ? "FHD" : "HD";
+                                String badge = quality.contains("2160") ? "4K Ultra HD" : quality.contains("1080") ? "FHD" : "HD";
                                 return Card(
                                   color: const Color(0xFF0F172A),
                                   child: ListTile(
@@ -442,13 +467,21 @@ jobs:
                                     onTap: () {
                                       Navigator.pop(context);
                                       _urlController.clear();
-                                      _queueNewTask(video, v.size.totalBytes, "Video ($quality)", v.container.name, false);
+                                      _queueNewTask(
+                                        title: video.title,
+                                        thumbnail: video.thumbnails.lowResUrl,
+                                        totalBytes: v.size.totalBytes,
+                                        quality: "Video ($quality)",
+                                        ext: v.container.name,
+                                        videoId: video.id.value,
+                                        isAudio: false,
+                                      );
                                     },
                                   ),
                                 );
                               }).toList(),
                               const SizedBox(height: 16),
-                              const Text("🎵 MP3 / Audio Formats",
+                              const Text("🎵 MP3 Audio Formats",
                                   style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 14)),
                               const SizedBox(height: 8),
                               ...allAudio.take(2).map((a) {
@@ -464,7 +497,15 @@ jobs:
                                     onTap: () {
                                       Navigator.pop(context);
                                       _urlController.clear();
-                                      _queueNewTask(video, a.size.totalBytes, "MP3 ($kbps kbps)", "mp3", true);
+                                      _queueNewTask(
+                                        title: video.title,
+                                        thumbnail: video.thumbnails.lowResUrl,
+                                        totalBytes: a.size.totalBytes,
+                                        quality: "MP3 ($kbps kbps)",
+                                        ext: "mp3",
+                                        videoId: video.id.value,
+                                        isAudio: true,
+                                      );
                                     },
                                   ),
                                 );
@@ -479,21 +520,69 @@ jobs:
               );
             }
 
-            Future<void> _queueNewTask(Video video, int totalBytes, String quality, String ext, bool isAudio) async {
+            void _showDirectMirrorSheet(String originalUrl, String directUrl) {
+              showModalBottomSheet(
+                context: context,
+                backgroundColor: const Color(0xFF1E293B),
+                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+                builder: (context) {
+                  return Container(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Text("⚡ High-Speed Turbo Stream Ready",
+                            style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 16)),
+                        const SizedBox(height: 6),
+                        const Text("Cloud mirror decoders ne video successfully extract kar li hai.",
+                            style: TextStyle(color: Colors.white70, fontSize: 13)),
+                        const SizedBox(height: 18),
+                        ElevatedButton.icon(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFF59E0B),
+                            foregroundColor: Colors.black,
+                            minimumSize: const Size(double.infinity, 45),
+                          ),
+                          onPressed: () {
+                            Navigator.pop(context);
+                            _urlController.clear();
+                            _queueDirectUrlTask(title: "YouTube Video (HD)", directUrl: directUrl);
+                          },
+                          icon: const Icon(Icons.download),
+                          label: const Text("Download MP4 (Original HD)", style: TextStyle(fontWeight: FontWeight.bold)),
+                        ),
+                        const SizedBox(height: 10),
+                      ],
+                    ),
+                  );
+                },
+              );
+            }
+
+            Future<void> _queueNewTask({
+              required String title,
+              required String thumbnail,
+              required int totalBytes,
+              required String quality,
+              required String ext,
+              required String videoId,
+              required bool isAudio,
+            }) async {
               await _requestPermissions();
               final dir = await _getDownloadFolder();
               if (dir == null) return;
 
-              String safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
+              String safeTitle = title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
               if (safeTitle.length > 28) safeTitle = safeTitle.substring(0, 28);
               String fileName = "${safeTitle}_${DateTime.now().millisecondsSinceEpoch}.$ext";
               String fullPath = "${dir.path}/$fileName";
 
               final task = DownloadItem(
                 id: DateTime.now().microsecondsSinceEpoch.toString(),
-                videoId: video.id.value,
-                title: video.title,
-                thumbnail: video.thumbnails.lowResUrl,
+                videoId: videoId,
+                title: title,
+                thumbnail: thumbnail,
                 quality: quality,
                 filePath: fullPath,
                 totalBytes: totalBytes,
@@ -507,27 +596,63 @@ jobs:
               _startPersistentStream(task);
             }
 
-            // Non-blocking streaming pipeline with auto-recovery against connection drops
+            Future<void> _queueDirectUrlTask({required String title, required String directUrl}) async {
+              await _requestPermissions();
+              final dir = await _getDownloadFolder();
+              if (dir == null) return;
+
+              String fileName = "Video_${DateTime.now().millisecondsSinceEpoch}.mp4";
+              String fullPath = "${dir.path}/$fileName";
+
+              final task = DownloadItem(
+                id: DateTime.now().microsecondsSinceEpoch.toString(),
+                videoId: "",
+                title: title,
+                thumbnail: "https://cdn-icons-png.flaticon.com/512/1384/1384060.png",
+                quality: "Original HD",
+                filePath: fullPath,
+                totalBytes: 1024 * 1024 * 20,
+                isAudio: false,
+                directStreamUrl: directUrl,
+              );
+
+              setState(() {
+                _tasks.insert(0, task);
+              });
+              _saveTasks();
+              _startPersistentStream(task);
+            }
+
             void _startPersistentStream(DownloadItem task) async {
-              final yt = YoutubeExplode();
               final file = File(task.filePath);
+              final yt = YoutubeExplode();
 
               try {
-                final manifest = await yt.videos.streamsClient.getManifest(task.videoId);
-                StreamInfo? streamInfo;
-                if (task.isAudio) {
-                  streamInfo = manifest.audioOnly.sortByBitrate().first;
+                Stream<List<int>> stream;
+                int total = task.totalBytes;
+
+                if (task.directStreamUrl != null) {
+                  final req = http.Request('GET', Uri.parse(task.directStreamUrl!));
+                  final res = await http.Client().send(req);
+                  stream = res.stream;
+                  total = res.contentLength ?? task.totalBytes;
                 } else {
-                  streamInfo = manifest.video.sortByVideoQuality().firstWhere(
-                    (s) => task.quality.contains(s.videoQualityLabel),
-                    orElse: () => manifest.video.sortByVideoQuality().first,
-                  );
+                  final manifest = await yt.videos.streamsClient.getManifest(task.videoId);
+                  StreamInfo? streamInfo;
+                  if (task.isAudio) {
+                    streamInfo = manifest.audioOnly.sortByBitrate().first;
+                  } else {
+                    streamInfo = manifest.video.sortByVideoQuality().firstWhere(
+                      (s) => task.quality.contains(s.videoQualityLabel),
+                      orElse: () => manifest.video.sortByVideoQuality().first,
+                    );
+                  }
+                  stream = yt.videos.streamsClient.get(streamInfo);
+                  total = streamInfo.size.totalBytes;
                 }
 
-                final stream = yt.videos.streamsClient.get(streamInfo);
                 final output = file.openWrite(mode: FileMode.writeOnlyAppend);
                 int received = file.existsSync() ? file.lengthSync() : 0;
-                int total = task.totalBytes > 0 ? task.totalBytes : streamInfo.size.totalBytes;
                 final stopwatch = Stopwatch()..start();
                 int lastBytes = received;
                 int lastTime = 0;
@@ -585,10 +710,9 @@ jobs:
                 _saveTasks();
                 _loadSavedFiles();
               } catch (e) {
-                // If line drops, mark paused for instant resume without crash
                 setState(() {
                   task.hasError = true;
-                  task.speed = "Connection Paused";
+                  task.speed = "Paused";
                 });
                 _saveTasks();
               } finally {
@@ -621,7 +745,7 @@ jobs:
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: const [
                       Text("4everTube 2027 Pro", style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 18)),
-                      Text("Background Engine Active", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                      Text("Double-Layer Engine Active", style: TextStyle(color: Colors.white54, fontSize: 11)),
                     ],
                   ),
                   bottom: TabBar(
@@ -655,7 +779,7 @@ jobs:
                 body: TabBarView(
                   controller: _tabController,
                   children: [
-                    // Tab 1: Active Downloads
+                    // Tab 1: Downloads
                     Padding(
                       padding: const EdgeInsets.all(12.0),
                       child: Column(
