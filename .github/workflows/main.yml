@@ -1,0 +1,41 @@
+name: Build 4everTube 2027 APK
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Create Scaffolding & Inject
+        run: |
+          flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
+          cd app_project
+          flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1
+          cp ../lib/main.dart lib/main.dart
+          cp ../android_config/AndroidManifest.xml android/app/src/main/AndroidManifest.xml
+          cp ../android_config/MainActivity.kt android/app/src/main/kotlin/com/technology4ever/forevertube2027/MainActivity.kt
+          if [ -d "../res" ]; then cp -r ../res/* android/app/src/main/res/; fi
+          flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: 4everTube_2027_Release_APK
+          path: app_project/build/app/outputs/flutter-apk/app-release.apk
