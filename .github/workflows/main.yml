@@ -27,18 +27,106 @@ jobs:
         run: |
           flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
           cd app_project
-          flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1 open_filex:^4.5.0 receive_sharing_intent_plus:^2.0.1
+          flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1 open_filex:^4.5.0
           
+          # 1. Native Android Kotlin MainActivity with Share Intent
+          cat << 'EOF' > android/app/src/main/kotlin/com/technology4ever/forevertube2027/MainActivity.kt
+          package com.technology4ever.forevertube2027
+
+          import io.flutter.embedding.android.FlutterActivity
+          import io.flutter.embedding.engine.FlutterEngine
+          import io.flutter.plugin.common.MethodChannel
+          import android.content.Intent
+
+          class MainActivity: FlutterActivity() {
+              private val CHANNEL = "com.technology4ever.forevertube2027/share"
+              private var sharedData: String? = null
+
+              override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+                super.configureFlutterEngine(flutterEngine)
+
+                MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
+                  if (call.method == "getSharedData") {
+                    result.success(sharedData)
+                    sharedData = null
+                  } else {
+                    result.notImplemented()
+                  }
+                }
+              }
+
+              override fun onNewIntent(intent: Intent) {
+                super.onNewIntent(intent)
+                handleSendIntent(intent)
+              }
+
+              override fun onResume() {
+                super.onResume()
+                handleSendIntent(intent)
+              }
+
+              private fun handleSendIntent(intent: Intent?) {
+                if (intent?.action == Intent.ACTION_SEND && intent.type == "text/plain") {
+                  sharedData = intent.getStringExtra(Intent.EXTRA_TEXT)
+                }
+              }
+          }
+          EOF
+
+          # 2. Android Manifest with Permissions & Intent Filters
+          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
+              package="com.technology4ever.forevertube2027">
+              <uses-permission android:name="android.permission.INTERNET"/>
+              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
+
+              <application
+                  android:label="4everTube 2027"
+                  android:name="${applicationName}"
+                  android:icon="@mipmap/ic_launcher"
+                  android:requestLegacyExternalStorage="true"
+                  android:usesCleartextTraffic="true">
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask"
+                      android:theme="@style/LaunchTheme"
+                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+                      android:hardwareAccelerated="true"
+                      android:windowSoftInputMode="adjustResize">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                      <intent-filter>
+                          <action android:name="android.intent.action.SEND" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <data android:mimeType="text/plain" />
+                      </intent-filter>
+                  </activity>
+                  <meta-data
+                      android:name="flutterEmbedding"
+                      android:value="2" />
+              </application>
+          </manifest>
+          EOF
+
+          # 3. Complete Flutter App Code with Pause, Resume, Cancel, Play Now & Saved Folder
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'dart:io';
           import 'package:flutter/material.dart';
+          import 'package:flutter/services.dart';
           import 'package:http/http.dart' as http;
           import 'package:open_filex/open_filex.dart';
           import 'package:path_provider/path_provider.dart';
           import 'package:permission_handler/permission_handler.dart';
-          import 'package:receive_sharing_intent_plus/receive_sharing_intent_plus.dart';
           import 'package:url_launcher/url_launcher.dart';
           import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
@@ -61,7 +149,7 @@ jobs:
             late TabController _tabController;
             final TextEditingController _urlController = TextEditingController();
             final YoutubeExplode _yt = YoutubeExplode();
-            late StreamSubscription _intentDataStreamSubscription;
+            static const platformChannel = MethodChannel('com.technology4ever.forevertube2027/share');
 
             bool _isLoading = false;
             bool _isDownloading = false;
@@ -87,39 +175,33 @@ jobs:
               super.initState();
               WidgetsBinding.instance.addObserver(this);
               _tabController = TabController(length: 2, vsync: this);
-              _setupShareListener();
+              _checkShareIntent();
               _loadDownloadedFiles();
-            }
-
-            void _setupShareListener() {
-              _intentDataStreamSubscription = ReceiveSharingIntentPlus.getTextStream().listen((String value) {
-                _handleIncomingSharedText(value);
-              }, onError: (err) {
-                debugPrint("getLinkStream error: $err");
-              });
-
-              ReceiveSharingIntentPlus.getInitialText().then((String? value) {
-                if (value != null && value.isNotEmpty) {
-                  _handleIncomingSharedText(value);
-                }
-              });
-            }
-
-            void _handleIncomingSharedText(String text) {
-              String? extracted = _extractUrlFromText(text);
-              if (extracted != null && extracted.isNotEmpty) {
-                setState(() {
-                  _urlController.text = extracted;
-                  _tabController.animateTo(0);
-                });
-                _fetchMedia();
-              }
             }
 
             @override
             void didChangeAppLifecycleState(AppLifecycleState state) {
               if (state == AppLifecycleState.resumed) {
+                _checkShareIntent();
                 _loadDownloadedFiles();
+              }
+            }
+
+            Future<void> _checkShareIntent() async {
+              try {
+                final String? sharedData = await platformChannel.invokeMethod('getSharedData');
+                if (sharedData != null && sharedData.isNotEmpty) {
+                  String? extracted = _extractUrlFromText(sharedData);
+                  if (extracted != null && extracted.isNotEmpty) {
+                    setState(() {
+                      _urlController.text = extracted;
+                      _tabController.animateTo(0);
+                    });
+                    _fetchMedia();
+                  }
+                }
+              } catch (e) {
+                debugPrint("Share check error: $e");
               }
             }
 
@@ -357,7 +439,7 @@ jobs:
                 setState(() {
                   _isDownloading = false;
                   _downloadProgress = 1.0;
-                  _statusText = "Mubarak! Download Mukammal ho gaya.";
+                  _statusText = "Download Mukammal!";
                   _speedText = "Done";
                   _etaText = "0s";
                   _latestDownloadedFilePath = filePath;
@@ -371,7 +453,7 @@ jobs:
                   _downloadProgress = 0.0;
                   _statusText = "Connection Drop: $e";
                 });
-                _showSnack("Download ruk gaya. Dobara try karein.");
+                _showSnack("Download error: $e");
               }
             }
 
@@ -560,7 +642,6 @@ jobs:
 
             @override
             void dispose() {
-              _intentDataStreamSubscription.cancel();
               WidgetsBinding.instance.removeObserver(this);
               _tabController.dispose();
               _yt.close();
@@ -606,7 +687,6 @@ jobs:
                 body: TabBarView(
                   controller: _tabController,
                   children: [
-                    // Tab 1: Downloader Page
                     Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
@@ -767,7 +847,6 @@ jobs:
                       ),
                     ),
 
-                    // Tab 2: Saved Files Manager
                     RefreshIndicator(
                       onRefresh: _loadDownloadedFiles,
                       child: _downloadedFiles.isEmpty
@@ -823,48 +902,6 @@ jobs:
               );
             }
           }
-          EOF
-
-          cat << 'EOF' > android/app/src/main/AndroidManifest.xml
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-              package="com.technology4ever.forevertube2027">
-              <uses-permission android:name="android.permission.INTERNET"/>
-              <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"/>
-              <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
-              <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
-              <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
-              <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
-              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
-
-              <application
-                  android:label="4everTube 2027"
-                  android:name="${applicationName}"
-                  android:icon="@mipmap/ic_launcher"
-                  android:requestLegacyExternalStorage="true"
-                  android:usesCleartextTraffic="true">
-                  <activity
-                      android:name=".MainActivity"
-                      android:exported="true"
-                      android:launchMode="singleTask"
-                      android:theme="@style/LaunchTheme"
-                      android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
-                      android:hardwareAccelerated="true"
-                      android:windowSoftInputMode="adjustResize">
-                      <intent-filter>
-                          <action android:name="android.intent.action.MAIN"/>
-                          <category android:name="android.intent.category.LAUNCHER"/>
-                      </intent-filter>
-                      <intent-filter>
-                          <action android:name="android.intent.action.SEND" />
-                          <category android:name="android.intent.category.DEFAULT" />
-                          <data android:mimeType="text/plain" />
-                      </intent-filter>
-                  </activity>
-                  <meta-data
-                      android:name="flutterEmbedding"
-                      android:value="2" />
-              </application>
-          </manifest>
           EOF
 
           flutter build apk --release
