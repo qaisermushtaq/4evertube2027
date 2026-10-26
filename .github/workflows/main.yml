@@ -23,7 +23,7 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate & Build 4everTube 2027 Double-Layer Pro
+      - name: Generate & Build 4everTube 2027 Final Fix
         run: |
           flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
           cd app_project
@@ -117,7 +117,7 @@ jobs:
           </manifest>
           EOF
 
-          # Flutter Source Code with Double-Layer Bridge
+          # Clean Flutter Source Code
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -343,7 +343,6 @@ jobs:
               _showSnack("✅ Engine Reset! Pending tasks resumed.");
             }
 
-            // Double-Layer Fallback Analyzer (YouTube Explode + Cloud Mirror)
             Future<void> _fastAnalyzeLink([String? directUrl]) async {
               final raw = directUrl ?? _urlController.text.trim();
               final url = _cleanLink(raw) ?? raw;
@@ -357,7 +356,6 @@ jobs:
                 _isAnalyzing = true;
               });
 
-              // Layer 1: Try Direct YouTube Explode
               final yt = YoutubeExplode();
               try {
                 final video = await yt.videos.get(url).timeout(const Duration(seconds: 4));
@@ -367,13 +365,12 @@ jobs:
                   _isAnalyzing = false;
                 });
                 yt.close();
-                _showFormatPicker(video, manifest, null);
+                _showFormatPicker(video, manifest);
                 return;
               } catch (_) {
                 yt.close();
               }
 
-              // Layer 2: Cloud API Mirror Fallback (Guaranteed Success)
               try {
                 final res = await http.post(
                   Uri.parse("https://api.cobalt.tools/api/json"),
@@ -400,7 +397,7 @@ jobs:
               _showSnack("Link analyze nahi ho saka. Dobara try karein.");
             }
 
-            void _showFormatPicker(Video video, StreamManifest manifest, String? mirrorUrl) {
+            void _showFormatPicker(Video video, StreamManifest manifest) {
               final allVideos = manifest.video.sortByVideoQuality();
               final allAudio = manifest.audioOnly.sortByBitrate();
 
@@ -779,7 +776,6 @@ jobs:
                 body: TabBarView(
                   controller: _tabController,
                   children: [
-                    // Tab 1: Downloads
                     Padding(
                       padding: const EdgeInsets.all(12.0),
                       child: Column(
