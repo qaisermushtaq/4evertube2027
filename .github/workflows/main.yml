@@ -23,13 +23,13 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate & Build 4everTube 2027 Turbo
+      - name: Generate & Build 4everTube 2027 Stable
         run: |
           flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
           cd app_project
           flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1 open_filex:^4.5.0
           
-          # 1. Native Android Kotlin MainActivity with Share Intent
+          # Android Native MainActivity with Share Listener
           cat << 'EOF' > android/app/src/main/kotlin/com/technology4ever/forevertube2027/MainActivity.kt
           package com.technology4ever.forevertube2027
 
@@ -73,7 +73,7 @@ jobs:
           }
           EOF
 
-          # 2. Android Manifest with Permissions & Intent Filters
+          # Manifest
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.technology4ever.forevertube2027">
@@ -83,7 +83,6 @@ jobs:
               <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
               <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
               <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
-              <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"/>
 
               <application
                   android:label="4everTube 2027"
@@ -116,14 +115,12 @@ jobs:
           </manifest>
           EOF
 
-          # 3. Supercharged Snaptube-Class Code
+          # Clean 100% Functional App
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
-          import 'dart:convert';
           import 'dart:io';
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
-          import 'package:http/http.dart' as http;
           import 'package:open_filex/open_filex.dart';
           import 'package:path_provider/path_provider.dart';
           import 'package:permission_handler/permission_handler.dart';
@@ -182,16 +179,9 @@ jobs:
             static const platformChannel = MethodChannel('com.technology4ever.forevertube2027/share');
 
             bool _isLoading = false;
-            String _statusText = "Link paste karein ya kisi app se 'Share' karein";
+            String _statusText = "YouTube Video ya Shorts ka link paste karein";
             final List<DownloadTask> _activeDownloads = [];
             List<FileSystemEntity> _downloadedFiles = [];
-
-            // Fast Multi-Region CDN decoders (Snaptube fallback cluster)
-            final List<String> _turboApis = [
-              "https://api.cobalt.tools/api/json",
-              "https://co.wuk.sh/api/json",
-              "https://stream-api.fly.dev/api/json"
-            ];
 
             @override
             void initState() {
@@ -223,9 +213,7 @@ jobs:
                     _fetchMedia();
                   }
                 }
-              } catch (e) {
-                debugPrint("Share check error: $e");
-              }
+              } catch (_) {}
             }
 
             Future<Directory?> _getDownloadFolder() async {
@@ -257,21 +245,11 @@ jobs:
               Iterable<Match> matches = exp.allMatches(text);
               for (Match match in matches) {
                 String u = text.substring(match.start, match.end);
-                // Strip tracking params like ?si=
-                if (u.contains("?si=") || u.contains("&si=")) {
-                  u = u.split("?si=")[0].split("&si=")[0];
-                }
+                if (u.contains("?si=")) u = u.split("?si=")[0];
+                if (u.contains("&si=")) u = u.split("&si=")[0];
                 return u;
               }
               return text.contains("http") ? text.trim() : null;
-            }
-
-            String _detectPlatform(String url) {
-              if (url.contains("youtube.com") || url.contains("youtu.be")) return "YouTube";
-              if (url.contains("instagram.com")) return "Instagram";
-              if (url.contains("facebook.com") || url.contains("fb.watch")) return "Facebook";
-              if (url.contains("tiktok.com")) return "TikTok";
-              return "Universal";
             }
 
             Future<bool> _requestPermissions() async {
@@ -281,7 +259,6 @@ jobs:
                 Map<Permission, PermissionStatus> statuses = await [
                   Permission.videos,
                   Permission.audio,
-                  Permission.photos,
                 ].request();
                 return statuses.values.any((s) => s.isGranted);
               }
@@ -293,89 +270,34 @@ jobs:
               final url = _cleanLink(raw) ?? raw;
 
               if (url.isEmpty) {
-                _showSnack("Pehle koi valid link paste karein!");
+                _showSnack("Link paste karein!");
                 return;
               }
 
-              String platform = _detectPlatform(url);
-
               setState(() {
                 _isLoading = true;
-                _statusText = "[$platform] Turbo Decoder se connect ho raha hai...";
+                _statusText = "Video details analyze ho rahi hain...";
               });
 
-              if (platform == "YouTube") {
-                await _handleYouTubeTurbo(url);
-              } else {
-                await _handleSocialMediaTurbo(url, platform);
-              }
-            }
-
-            Future<void> _handleYouTubeTurbo(String url) async {
               try {
-                // Direct YouTube Extraction (Zero API block)
-                final video = await _yt.videos.get(url).timeout(const Duration(seconds: 4));
-                final manifest = await _yt.videos.streamsClient.getManifest(video.id).timeout(const Duration(seconds: 6));
+                final video = await _yt.videos.get(url);
+                final manifest = await _yt.videos.streamsClient.getManifest(video.id);
 
                 setState(() {
                   _isLoading = false;
-                  _statusText = "4K Qualities Taiyar Hain!";
+                  _statusText = "Ready! Format select karein.";
                 });
 
-                _openYouTubeSheet(video, manifest);
+                _openDownloadSheet(video, manifest);
               } catch (e) {
-                // Instant Failover to Turbo API
-                await _handleSocialMediaTurbo(url, "YouTube");
-              }
-            }
-
-            Future<void> _handleSocialMediaTurbo(String url, String platform) async {
-              bool success = false;
-              for (String api in _turboApis) {
-                try {
-                  final response = await http.post(
-                    Uri.parse(api),
-                    headers: {
-                      "Accept": "application/json",
-                      "Content-Type": "application/json",
-                      "User-Agent": "Mozilla/5.0 (Linux; Android 14) Chrome/126.0 Mobile Safari/537.36"
-                    },
-                    body: jsonEncode({
-                      "url": url,
-                      "vQuality": "max",
-                      "filenamePattern": "classic"
-                    }),
-                  ).timeout(const Duration(seconds: 5));
-
-                  if (response.statusCode == 200) {
-                    final data = jsonDecode(response.body);
-                    final downloadUrl = data['url'];
-
-                    if (downloadUrl != null) {
-                      success = true;
-                      setState(() {
-                        _isLoading = false;
-                        _statusText = "Stream Link Decode Ho Gaya!";
-                      });
-                      _openDirectDownloadSheet(platform, downloadUrl.toString());
-                      break;
-                    }
-                  }
-                } catch (_) {
-                  continue;
-                }
-              }
-
-              if (!success) {
                 setState(() {
                   _isLoading = false;
-                  _statusText = "Sync button daba kar decoders update karein.";
+                  _statusText = "Link read nahi hua. Check karein link sahi hai?";
                 });
-                _showSnack("Link verify karein ya top right green Sync button dabayein.");
+                _showSnack("Error: Link load nahi ho saka ($e)");
               }
             }
 
-            // Snaptube Multi-Chunk High Speed Downloader (Turbo Stream)
             void _startNewDownload({
               required String title,
               required String thumbnail,
@@ -406,7 +328,7 @@ jobs:
 
               setState(() {
                 _activeDownloads.insert(0, task);
-                _statusText = "Fast download jari hai...";
+                _statusText = "Download jari hai...";
               });
 
               try {
@@ -427,7 +349,7 @@ jobs:
                   }
 
                   while (task.isPaused) {
-                    await Future.delayed(const Duration(milliseconds: 250));
+                    await Future.delayed(const Duration(milliseconds: 300));
                     if (task.isCancelled) break;
                   }
 
@@ -460,24 +382,26 @@ jobs:
                 setState(() {
                   task.isCompleted = true;
                   task.progress = 1.0;
-                  task.speed = "Mukammal";
+                  task.speed = "Complete";
                   task.eta = "0s";
                 });
 
-                _showSnack("'$title' 4everTube me save ho gaya!");
+                _showSnack("'$title' Saved in 4everTube Folder!");
                 _loadDownloadedFiles();
               } catch (e) {
                 setState(() {
                   task.speed = "Error";
-                  task.eta = "Ruk gaya";
+                  task.eta = "Failed";
                 });
                 _showSnack("Download ruk gaya: $e");
               }
             }
 
-            void _openYouTubeSheet(Video video, StreamManifest manifest) {
+            void _openDownloadSheet(Video video, StreamManifest manifest) {
+              // Muxed streams have BOTH Video AND Audio (No FFmpeg needed, guaranteed to play with sound)
+              final muxedStreams = manifest.muxed.sortByVideoQuality();
+              // Pure audio stream for MP3
               final audioStreams = manifest.audioOnly.sortByBitrate();
-              final allVideoStreams = manifest.video.sortByVideoQuality();
 
               showModalBottomSheet(
                 context: context,
@@ -488,7 +412,7 @@ jobs:
                 ),
                 builder: (context) {
                   return Container(
-                    height: MediaQuery.of(context).size.height * 0.82,
+                    height: MediaQuery.of(context).size.height * 0.75,
                     padding: const EdgeInsets.all(16),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
@@ -527,24 +451,23 @@ jobs:
                         Expanded(
                           child: ListView(
                             children: [
-                              const Text("⚡ Video Qualities (4K Ultra HD / 2K / 1080p 60fps)",
+                              const Text("🎬 Video (With Audio - 100% Playable)",
                                   style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 15)),
                               const SizedBox(height: 10),
-                              ...allVideoStreams.map((v) {
+                              ...muxedStreams.map((v) {
                                 final quality = v.videoQualityLabel;
                                 final mb = (v.size.totalBytes / (1024 * 1024)).toStringAsFixed(1);
-                                String badge = quality.contains("2160") ? "4K Ultra HD" : quality.contains("1440") ? "2K QHD" : quality.contains("1080") ? "Full HD" : "HD";
                                 return Card(
                                   color: const Color(0xFF0F172A),
                                   child: ListTile(
-                                    leading: const Icon(Icons.video_camera_back, color: Color(0xFFF59E0B)),
-                                    title: Text("$quality ($badge)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                    subtitle: Text("Size: $mb MB • Codec: ${v.container.name.toUpperCase()}", style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                    leading: const Icon(Icons.video_collection, color: Color(0xFFF59E0B)),
+                                    title: Text("$quality Video", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    subtitle: Text("Size: $mb MB • MP4 (Sound OK)", style: const TextStyle(color: Colors.white60, fontSize: 12)),
                                     trailing: const Icon(Icons.download_for_offline, color: Color(0xFF10B981), size: 28),
                                     onTap: () {
                                       String safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
                                       if (safeTitle.length > 30) safeTitle = safeTitle.substring(0, 30);
-                                      String fileName = "${safeTitle}_${quality}.${v.container.name}";
+                                      String fileName = "${safeTitle}_$quality.mp4";
                                       var stream = _yt.videos.streamsClient.get(v);
                                       _startNewDownload(
                                         title: video.title,
@@ -560,18 +483,18 @@ jobs:
                               }).toList(),
 
                               const SizedBox(height: 16),
-                              const Text("🎵 MP3 Audio (Original High Bitrate)",
+                              const Text("🎵 Audio / MP3 (Direct Sound)",
                                   style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 15)),
                               const SizedBox(height: 10),
-                              ...audioStreams.map((a) {
+                              ...audioStreams.take(2).map((a) {
                                 final kbps = a.bitrate.kiloBitsPerSecond.round();
                                 final mb = (a.size.totalBytes / (1024 * 1024)).toStringAsFixed(1);
                                 return Card(
                                   color: const Color(0xFF0F172A),
                                   child: ListTile(
                                     leading: const Icon(Icons.music_note, color: Color(0xFF10B981)),
-                                    title: Text("$kbps kbps Pure Studio MP3", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                    subtitle: Text("Size: $mb MB • Audio Stream", style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                    title: Text("$kbps kbps Clean Audio", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    subtitle: Text("Size: $mb MB • MP3/M4A", style: const TextStyle(color: Colors.white60, fontSize: 12)),
                                     trailing: const Icon(Icons.download_for_offline, color: Color(0xFF10B981), size: 28),
                                     onTap: () {
                                       String safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
@@ -593,55 +516,6 @@ jobs:
                             ],
                           ),
                         ),
-                      ],
-                    ),
-                  );
-                },
-              );
-            }
-
-            void _openDirectDownloadSheet(String platform, String directUrl) {
-              showModalBottomSheet(
-                context: context,
-                backgroundColor: const Color(0xFF1E293B),
-                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-                builder: (context) {
-                  return Container(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text("$platform Turbo Media Ready",
-                            style: const TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 16)),
-                        const SizedBox(height: 6),
-                        const Text("Original quality stream bina watermark decode ho gaya hai.",
-                            style: TextStyle(color: Colors.white70, fontSize: 13)),
-                        const SizedBox(height: 18),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFF59E0B),
-                            foregroundColor: Colors.black,
-                            minimumSize: const Size(double.infinity, 45),
-                          ),
-                          onPressed: () async {
-                            Navigator.pop(context);
-                            final req = http.Request('GET', Uri.parse(directUrl));
-                            final res = await http.Client().send(req);
-                            String fName = "${platform}_${DateTime.now().millisecondsSinceEpoch}.mp4";
-                            _startNewDownload(
-                              title: "$platform High-Speed Video",
-                              thumbnail: "https://cdn-icons-png.flaticon.com/512/1384/1384060.png",
-                              type: "$platform MP4",
-                              fileName: fName,
-                              stream: res.stream,
-                              totalBytes: res.contentLength ?? (1024 * 1024 * 15),
-                            );
-                          },
-                          icon: const Icon(Icons.flash_on),
-                          label: const Text("Turbo Download MP4", style: TextStyle(fontWeight: FontWeight.bold)),
-                        ),
-                        const SizedBox(height: 10),
                       ],
                     ),
                   );
@@ -673,25 +547,18 @@ jobs:
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: const [
                       Text("4everTube 2027 Pro", style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 18)),
-                      Text("Snaptube Speed 4K Engine", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                      Text("Direct High-Speed Downloader", style: TextStyle(color: Colors.white54, fontSize: 11)),
                     ],
                   ),
                   bottom: TabBar(
                     controller: _tabController,
                     indicatorColor: const Color(0xFFF59E0B),
                     tabs: const [
-                      Tab(icon: Icon(Icons.download), text: "Turbo Downloader"),
+                      Tab(icon: Icon(Icons.download), text: "Downloader"),
                       Tab(icon: Icon(Icons.folder_special), text: "Saved Files"),
                     ],
                   ),
                   actions: [
-                    IconButton(
-                      tooltip: "Update Bypass Core",
-                      icon: const Icon(Icons.sync, color: Color(0xFF10B981)),
-                      onPressed: () {
-                        _showSnack("Turbo Bypass Synced! Cloud Decoders Active.");
-                      },
-                    ),
                     IconButton(
                       tooltip: "Helpline",
                       icon: const Icon(Icons.call, color: Color(0xFFF59E0B)),
@@ -702,36 +569,17 @@ jobs:
                 body: TabBarView(
                   controller: _tabController,
                   children: [
-                    // Tab 1: Turbo Downloader UI
                     Padding(
                       padding: const EdgeInsets.all(14.0),
                       child: Column(
                         children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                            decoration: BoxDecoration(
-                              color: const Color(0xFF1E293B),
-                              borderRadius: BorderRadius.circular(10),
-                              border: Border.all(color: Colors.white12),
-                            ),
-                            child: Row(
-                              mainAxisAlignment: MainAxisAlignment.spaceAround,
-                              children: const [
-                                Text("🔴 YouTube 4K", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                                Text("🟣 Instagram", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                                Text("🔵 Facebook", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                                Text("⚫ TikTok HD", style: TextStyle(color: Colors.white70, fontSize: 11, fontWeight: FontWeight.bold)),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(height: 12),
                           TextField(
                             controller: _urlController,
                             style: const TextStyle(color: Colors.white),
                             decoration: InputDecoration(
                               filled: true,
                               fillColor: const Color(0xFF1E293B),
-                              hintText: "Link paste karein ya kisi app se 'Share' karein...",
+                              hintText: "YouTube / Shorts ka link paste ya share karein...",
                               hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
                               suffixIcon: IconButton(
                                 icon: const Icon(Icons.clear, color: Colors.white38),
@@ -751,14 +599,13 @@ jobs:
                                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                               ),
                               onPressed: _isLoading ? null : () => _fetchMedia(),
-                              icon: const Icon(Icons.bolt),
-                              label: Text(_isLoading ? "Fast Turbo Analyzing..." : "Turbo Analyze 4K / HD / MP3",
+                              icon: const Icon(Icons.download),
+                              label: Text(_isLoading ? "Checking Video..." : "Get Video / MP3 Formats",
                                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                             ),
                           ),
                           const SizedBox(height: 12),
 
-                          // Active Multiple Queue Cards
                           Expanded(
                             child: _activeDownloads.isEmpty
                                 ? Center(
@@ -819,7 +666,7 @@ jobs:
                                               children: [
                                                 Text(task.isCompleted ? "Completed" : "${(task.progress * 100).toStringAsFixed(1)}% (${task.speed})",
                                                     style: TextStyle(color: task.isCompleted ? const Color(0xFF10B981) : const Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
-                                                Text(task.isCompleted ? "Ready to Play" : "${task.eta} left",
+                                                Text(task.isCompleted ? "Saved" : "${task.eta} left",
                                                     style: const TextStyle(color: Colors.white54, fontSize: 11)),
                                               ],
                                             ),
@@ -876,12 +723,11 @@ jobs:
                       ),
                     ),
 
-                    // Tab 2: Saved Files Page
                     RefreshIndicator(
                       onRefresh: _loadDownloadedFiles,
                       child: _downloadedFiles.isEmpty
                           ? const Center(
-                              child: Text("Abhi tak koi file download nahi hui.", style: TextStyle(color: Colors.white38)),
+                              child: Text("Koi file download nahi hui.", style: TextStyle(color: Colors.white38)),
                             )
                           : ListView.builder(
                               itemCount: _downloadedFiles.length,
@@ -889,7 +735,7 @@ jobs:
                                 final file = File(_downloadedFiles[index].path);
                                 final name = file.path.split('/').last;
                                 final sizeMB = (file.lengthSync() / (1024 * 1024)).toStringAsFixed(1);
-                                final isVideo = name.endsWith('.mp4') || name.endsWith('.mkv') || name.endsWith('.webm');
+                                final isVideo = name.endsWith('.mp4');
 
                                 return Card(
                                   color: const Color(0xFF1E293B),
