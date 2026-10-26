@@ -29,7 +29,6 @@ jobs:
           cd app_project
           flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1
           
-          # Write main.dart directly
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -356,7 +355,7 @@ jobs:
                                 child: Text(
                                   video.title,
                                   maxLines: 2,
-                                  overflow: TextStream.ellipsis,
+                                  overflow: TextOverflow.ellipsis,
                                   style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
                                 ),
                               ),
@@ -620,7 +619,6 @@ jobs:
           }
           EOF
 
-          # Configure AndroidManifest.xml permissions & share filters
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.technology4ever.forevertube2027">
@@ -659,7 +657,6 @@ jobs:
           </manifest>
           EOF
 
-          # Build APK
           flutter build apk --release
 
       - name: Upload APK
