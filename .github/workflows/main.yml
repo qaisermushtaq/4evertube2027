@@ -23,13 +23,13 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate & Build 4everTube 2027 Pro Ultra
+      - name: Generate & Build 4everTube 2027 Pro Ultra Max
         run: |
           flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
           cd app_project
-          flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1 open_filex:^4.5.0
+          flutter pub add youtube_explode_dart:^2.5.3 http:^1.2.2 path_provider:^2.1.4 permission_handler:^11.3.1 url_launcher:^6.3.1 open_filex:^4.5.0 shared_preferences:^2.3.2
           
-          # Native Android Kotlin MainActivity
+          # Native Android Kotlin MainActivity with Direct Share Intent
           cat << 'EOF' > android/app/src/main/kotlin/com/technology4ever/forevertube2027/MainActivity.kt
           package com.technology4ever.forevertube2027
 
@@ -73,7 +73,7 @@ jobs:
           }
           EOF
 
-          # Manifest
+          # Android Manifest with Full Background Services
           cat << 'EOF' > android/app/src/main/AndroidManifest.xml
           <manifest xmlns:android="http://schemas.android.com/apk/res/android"
               package="com.technology4ever.forevertube2027">
@@ -83,6 +83,8 @@ jobs:
               <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
               <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"/>
               <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"/>
+              <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+              <uses-permission android:name="android.permission.WAKE_LOCK"/>
 
               <application
                   android:label="4everTube 2027"
@@ -115,15 +117,17 @@ jobs:
           </manifest>
           EOF
 
-          # Complete Flutter App
+          # Complete Flutter Source Code
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
+          import 'dart:convert';
           import 'dart:io';
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
           import 'package:open_filex/open_filex.dart';
           import 'package:path_provider/path_provider.dart';
           import 'package:permission_handler/permission_handler.dart';
+          import 'package:shared_preferences/shared_preferences.dart';
           import 'package:url_launcher/url_launcher.dart';
           import 'package:youtube_explode_dart/youtube_explode_dart.dart';
 
@@ -135,34 +139,63 @@ jobs:
             ));
           }
 
-          class DownloadTask {
+          class DownloadItem {
             final String id;
+            final String videoId;
             final String title;
             final String thumbnail;
-            final String type;
-            double progress;
-            String speed;
-            String eta;
-            String sizeInfo;
-            bool isPaused;
-            bool isCancelled;
-            bool isCompleted;
-            String? filePath;
+            final String quality;
+            final String filePath;
+            final int totalBytes;
+            final bool isAudio;
 
-            DownloadTask({
+            double progress = 0.0;
+            String speed = "Connecting...";
+            String eta = "--";
+            String sizeInfo = "0 MB";
+            bool isPaused = false;
+            bool isCancelled = false;
+            bool isCompleted = false;
+            bool hasError = false;
+
+            DownloadItem({
               required this.id,
+              required this.videoId,
               required this.title,
               required this.thumbnail,
-              required this.type,
+              required this.quality,
+              required this.filePath,
+              required this.totalBytes,
+              required this.isAudio,
               this.progress = 0.0,
-              this.speed = "Starting...",
-              this.eta = "--",
-              this.sizeInfo = "0 MB",
-              this.isPaused = false,
-              this.isCancelled = false,
               this.isCompleted = false,
-              this.filePath,
             });
+
+            Map<String, dynamic> toJson() => {
+              'id': id,
+              'videoId': videoId,
+              'title': title,
+              'thumbnail': thumbnail,
+              'quality': quality,
+              'filePath': filePath,
+              'totalBytes': totalBytes,
+              'isAudio': isAudio,
+              'progress': progress,
+              'isCompleted': isCompleted,
+            };
+
+            factory DownloadItem.fromJson(Map<String, dynamic> json) => DownloadItem(
+              id: json['id'],
+              videoId: json['videoId'],
+              title: json['title'],
+              thumbnail: json['thumbnail'],
+              quality: json['quality'],
+              filePath: json['filePath'],
+              totalBytes: json['totalBytes'] ?? 0,
+              isAudio: json['isAudio'] ?? false,
+              progress: (json['progress'] ?? 0.0).toDouble(),
+              isCompleted: json['isCompleted'] ?? false,
+            );
           }
 
           class ForeverTubeMasterApp extends StatefulWidget {
@@ -177,9 +210,8 @@ jobs:
             final TextEditingController _urlController = TextEditingController();
             static const platformChannel = MethodChannel('com.technology4ever.forevertube2027/share');
 
-            bool _isLoading = false;
-            String _statusText = "Link paste karein ya kisi app se 'Share' karein";
-            final List<DownloadTask> _activeDownloads = [];
+            bool _isAnalyzing = false;
+            final List<DownloadItem> _tasks = [];
             List<FileSystemEntity> _downloadedFiles = [];
 
             @override
@@ -187,18 +219,50 @@ jobs:
               super.initState();
               WidgetsBinding.instance.addObserver(this);
               _tabController = TabController(length: 2, vsync: this);
+              _restoreTasks();
+              _loadSavedFiles();
               _checkShareIntent();
-              _loadDownloadedFiles();
             }
 
             @override
             void didChangeAppLifecycleState(AppLifecycleState state) {
               if (state == AppLifecycleState.resumed) {
                 _checkShareIntent();
-                _loadDownloadedFiles();
+                _loadSavedFiles();
               }
             }
 
+            Future<void> _saveTasks() async {
+              try {
+                final prefs = await SharedPreferences.getInstance();
+                final list = _tasks.map((t) => jsonEncode(t.toJson())).toList();
+                await prefs.setStringList('saved_download_tasks', list);
+              } catch (_) {}
+            }
+
+            Future<void> _restoreTasks() async {
+              try {
+                final prefs = await SharedPreferences.getInstance();
+                final list = prefs.getStringList('saved_download_tasks');
+                if (list != null && list.isNotEmpty) {
+                  setState(() {
+                    _tasks.clear();
+                    for (var str in list) {
+                      final item = DownloadItem.fromJson(jsonDecode(str));
+                      if (File(item.filePath).existsSync() && item.isCompleted) {
+                        _tasks.add(item);
+                      } else if (!item.isCompleted) {
+                        item.hasError = true;
+                        item.speed = "Paused";
+                        _tasks.add(item);
+                      }
+                    }
+                  });
+                }
+              } catch (_) {}
+            }
+
+            // Share Intent listener: Directly opens the quality popup
             Future<void> _checkShareIntent() async {
               try {
                 final String? sharedData = await platformChannel.invokeMethod('getSharedData');
@@ -209,7 +273,8 @@ jobs:
                       _urlController.text = extracted;
                       _tabController.animateTo(0);
                     });
-                    _fetchMedia();
+                    // Direct Instant Analyze & Open Sheet
+                    _fastAnalyzeLink(extracted);
                   }
                 }
               } catch (_) {}
@@ -226,7 +291,7 @@ jobs:
               return await getApplicationDocumentsDirectory();
             }
 
-            Future<void> _loadDownloadedFiles() async {
+            Future<void> _loadSavedFiles() async {
               try {
                 final dir = await _getDownloadFolder();
                 if (dir != null && await dir.exists()) {
@@ -264,86 +329,207 @@ jobs:
               return true;
             }
 
-            // Fresh client for every request to prevent freezing
-            Future<void> _fetchMedia() async {
-              final raw = _urlController.text.trim();
+            void _quickFixAndReset() {
+              for (var t in _tasks) {
+                if (t.hasError || (!t.isCompleted && t.isPaused)) {
+                  t.hasError = false;
+                  t.isPaused = false;
+                  _startPersistentStream(t);
+                }
+              }
+              _loadSavedFiles();
+              _showSnack("✅ Background Engine Reset! Pending tasks resumed.");
+            }
+
+            // Direct Fast Resolution
+            Future<void> _fastAnalyzeLink([String? directUrl]) async {
+              final raw = directUrl ?? _urlController.text.trim();
               final url = _cleanLink(raw) ?? raw;
 
               if (url.isEmpty) {
-                _showSnack("Pehle koi valid link paste karein!");
+                _showSnack("Pehle YouTube link paste ya share karein!");
                 return;
               }
 
               setState(() {
-                _isLoading = true;
-                _statusText = "Video details analyze ho rahi hain...";
+                _isAnalyzing = true;
               });
 
               final yt = YoutubeExplode();
               try {
-                final video = await yt.videos.get(url);
-                final manifest = await yt.videos.streamsClient.getManifest(video.id);
+                final video = await yt.videos.get(url).timeout(const Duration(seconds: 4));
+                final manifest = await yt.videos.streamsClient.getManifest(video.id).timeout(const Duration(seconds: 6));
 
                 setState(() {
-                  _isLoading = false;
-                  _statusText = "Formats taiyar hain! Quality select karein.";
+                  _isAnalyzing = false;
                 });
 
-                _openDownloadSheet(video, manifest);
+                _showFormatPicker(video, manifest);
               } catch (e) {
                 setState(() {
-                  _isLoading = false;
-                  _statusText = "Link load nahi hua. Dobara try karein.";
+                  _isAnalyzing = false;
                 });
-                _showSnack("Error: $e");
+                _showSnack("Video details decode nahi ho sakeen. Dobara try karein.");
               } finally {
                 yt.close();
               }
             }
 
-            void _startNewDownload({
-              required String videoId,
-              required StreamInfo streamInfo,
-              required String title,
-              required String thumbnail,
-              required String type,
-              required String fileName,
-            }) async {
-              Navigator.pop(context);
-              _urlController.clear();
+            void _showFormatPicker(Video video, StreamManifest manifest) {
+              final allVideos = manifest.video.sortByVideoQuality();
+              final allAudio = manifest.audioOnly.sortByBitrate();
+
+              showModalBottomSheet(
+                context: context,
+                backgroundColor: const Color(0xFF1E293B),
+                isScrollControlled: true,
+                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+                builder: (context) {
+                  return Container(
+                    height: MediaQuery.of(context).size.height * 0.82,
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(8),
+                              child: Image.network(
+                                video.thumbnails.lowResUrl,
+                                width: 85,
+                                height: 58,
+                                fit: BoxFit.cover,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    video.title,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
+                                  ),
+                                  const SizedBox(height: 3),
+                                  Text("${video.author} • ${video.duration?.inMinutes ?? 0}m",
+                                      style: const TextStyle(color: Colors.white54, fontSize: 11)),
+                                ],
+                              ),
+                            ),
+                          ],
+                        ),
+                        const Divider(color: Colors.white24, height: 24),
+                        Expanded(
+                          child: ListView(
+                            children: [
+                              const Text("🎬 Video Formats (Choose Quality)",
+                                  style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 14)),
+                              const SizedBox(height: 8),
+                              ...allVideos.map((v) {
+                                final quality = v.videoQualityLabel;
+                                final mb = (v.size.totalBytes / (1024 * 1024)).toStringAsFixed(1);
+                                String badge = quality.contains("2160") ? "4K Ultra HD" : quality.contains("1440") ? "2K QHD" : quality.contains("1080") ? "FHD" : "HD";
+                                return Card(
+                                  color: const Color(0xFF0F172A),
+                                  child: ListTile(
+                                    leading: const Icon(Icons.flash_on, color: Color(0xFFF59E0B)),
+                                    title: Text("$quality Video ($badge)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    subtitle: Text("Size: $mb MB • ${v.container.name.toUpperCase()}", style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                    trailing: const Icon(Icons.download, color: Color(0xFF10B981)),
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      _urlController.clear();
+                                      _queueNewTask(video, v.size.totalBytes, "Video ($quality)", v.container.name, false);
+                                    },
+                                  ),
+                                );
+                              }).toList(),
+                              const SizedBox(height: 16),
+                              const Text("🎵 MP3 / Audio Formats",
+                                  style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 14)),
+                              const SizedBox(height: 8),
+                              ...allAudio.take(2).map((a) {
+                                final kbps = a.bitrate.kiloBitsPerSecond.round();
+                                final mb = (a.size.totalBytes / (1024 * 1024)).toStringAsFixed(1);
+                                return Card(
+                                  color: const Color(0xFF0F172A),
+                                  child: ListTile(
+                                    leading: const Icon(Icons.music_note, color: Color(0xFF10B981)),
+                                    title: Text("$kbps kbps MP3 Audio", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                                    subtitle: Text("Size: $mb MB • Audio Stream", style: const TextStyle(color: Colors.white60, fontSize: 12)),
+                                    trailing: const Icon(Icons.download, color: Color(0xFF10B981)),
+                                    onTap: () {
+                                      Navigator.pop(context);
+                                      _urlController.clear();
+                                      _queueNewTask(video, a.size.totalBytes, "MP3 ($kbps kbps)", "mp3", true);
+                                    },
+                                  ),
+                                );
+                              }).toList(),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                },
+              );
+            }
+
+            Future<void> _queueNewTask(Video video, int totalBytes, String quality, String ext, bool isAudio) async {
               await _requestPermissions();
-
               final dir = await _getDownloadFolder();
-              if (dir == null) {
-                _showSnack("Storage permission zaroori hai!");
-                return;
-              }
+              if (dir == null) return;
 
-              final filePath = "${dir.path}/$fileName";
-              final file = File(filePath);
+              String safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
+              if (safeTitle.length > 28) safeTitle = safeTitle.substring(0, 28);
+              String fileName = "${safeTitle}_${DateTime.now().millisecondsSinceEpoch}.$ext";
+              String fullPath = "${dir.path}/$fileName";
 
-              final task = DownloadTask(
-                id: DateTime.now().millisecondsSinceEpoch.toString(),
-                title: title,
-                thumbnail: thumbnail,
-                type: type,
-                filePath: filePath,
+              final task = DownloadItem(
+                id: DateTime.now().microsecondsSinceEpoch.toString(),
+                videoId: video.id.value,
+                title: video.title,
+                thumbnail: video.thumbnails.lowResUrl,
+                quality: quality,
+                filePath: fullPath,
+                totalBytes: totalBytes,
+                isAudio: isAudio,
               );
 
               setState(() {
-                _activeDownloads.insert(0, task);
-                _statusText = "Downloading shuru ho gayi!";
+                _tasks.insert(0, task);
               });
+              _saveTasks();
+              _startPersistentStream(task);
+            }
 
-              final ytDownloader = YoutubeExplode();
+            // Non-blocking streaming pipeline with auto-recovery against connection drops
+            void _startPersistentStream(DownloadItem task) async {
+              final yt = YoutubeExplode();
+              final file = File(task.filePath);
 
               try {
-                final stream = ytDownloader.videos.streamsClient.get(streamInfo);
-                var output = file.openWrite(mode: FileMode.writeOnly);
-                int received = 0;
-                int totalBytes = streamInfo.size.totalBytes;
+                final manifest = await yt.videos.streamsClient.getManifest(task.videoId);
+                StreamInfo? streamInfo;
+                if (task.isAudio) {
+                  streamInfo = manifest.audioOnly.sortByBitrate().first;
+                } else {
+                  streamInfo = manifest.video.sortByVideoQuality().firstWhere(
+                    (s) => task.quality.contains(s.videoQualityLabel),
+                    orElse: () => manifest.video.sortByVideoQuality().first,
+                  );
+                }
+
+                final stream = yt.videos.streamsClient.get(streamInfo);
+                final output = file.openWrite(mode: FileMode.writeOnlyAppend);
+                int received = file.existsSync() ? file.lengthSync() : 0;
+                int total = task.totalBytes > 0 ? task.totalBytes : streamInfo.size.totalBytes;
                 final stopwatch = Stopwatch()..start();
-                int lastBytes = 0;
+                int lastBytes = received;
                 int lastTime = 0;
 
                 await for (final chunk in stream) {
@@ -351,14 +537,15 @@ jobs:
                     await output.close();
                     if (file.existsSync()) file.deleteSync();
                     setState(() {
-                      _activeDownloads.remove(task);
+                      _tasks.remove(task);
                     });
-                    ytDownloader.close();
+                    _saveTasks();
+                    yt.close();
                     return;
                   }
 
                   while (task.isPaused) {
-                    await Future.delayed(const Duration(milliseconds: 300));
+                    await Future.delayed(const Duration(milliseconds: 250));
                     if (task.isCancelled) break;
                   }
 
@@ -366,15 +553,15 @@ jobs:
                   received += chunk.length;
 
                   int elapsed = stopwatch.elapsedMilliseconds;
-                  if (elapsed - lastTime >= 400) {
+                  if (elapsed - lastTime >= 350) {
                     double speedBytesPerSec = ((received - lastBytes) / ((elapsed - lastTime) / 1000));
                     double speedMB = speedBytesPerSec / (1024 * 1024);
-                    int remainingBytes = totalBytes > received ? (totalBytes - received) : 0;
+                    int remainingBytes = total > received ? (total - received) : 0;
                     int etaSec = speedBytesPerSec > 0 ? (remainingBytes / speedBytesPerSec).round() : 0;
 
                     setState(() {
-                      task.progress = totalBytes > 0 ? (received / totalBytes) : 0.5;
-                      task.sizeInfo = "${(received / (1024 * 1024)).toStringAsFixed(1)} MB / ${(totalBytes / (1024 * 1024)).toStringAsFixed(1)} MB";
+                      task.progress = total > 0 ? (received / total) : 0.5;
+                      task.sizeInfo = "${(received / (1024 * 1024)).toStringAsFixed(1)}MB / ${(total / (1024 * 1024)).toStringAsFixed(1)}MB";
                       task.speed = "${speedMB.toStringAsFixed(2)} MB/s";
                       task.eta = etaSec > 60 ? "${(etaSec / 60).toStringAsFixed(0)}m ${etaSec % 60}s" : "${etaSec}s";
                     });
@@ -395,146 +582,22 @@ jobs:
                   task.eta = "0s";
                 });
 
-                _showSnack("'$title' Saved!");
-                _loadDownloadedFiles();
+                _saveTasks();
+                _loadSavedFiles();
               } catch (e) {
+                // If line drops, mark paused for instant resume without crash
                 setState(() {
-                  task.speed = "Error";
-                  task.eta = "Failed";
+                  task.hasError = true;
+                  task.speed = "Connection Paused";
                 });
-                _showSnack("Download ruk gaya: $e");
+                _saveTasks();
               } finally {
-                ytDownloader.close();
+                yt.close();
               }
             }
 
-            void _openDownloadSheet(Video video, StreamManifest manifest) {
-              // Get all available video qualities (including 1080p, 1440p, 4K)
-              final allVideoStreams = manifest.video.sortByVideoQuality();
-              // Get clean audio streams
-              final audioStreams = manifest.audioOnly.sortByBitrate();
-
-              showModalBottomSheet(
-                context: context,
-                backgroundColor: const Color(0xFF1E293B),
-                isScrollControlled: true,
-                shape: const RoundedRectangleBorder(
-                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-                ),
-                builder: (context) {
-                  return Container(
-                    height: MediaQuery.of(context).size.height * 0.80,
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.network(
-                                video.thumbnails.lowResUrl,
-                                width: 85,
-                                height: 60,
-                                fit: BoxFit.cover,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  Text(
-                                    video.title,
-                                    maxLines: 2,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13),
-                                  ),
-                                  const SizedBox(height: 4),
-                                  Text("${video.author} • ${video.duration?.inMinutes ?? 0} mins",
-                                      style: const TextStyle(color: Colors.white54, fontSize: 11)),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                        const Divider(color: Colors.white24, height: 25),
-                        Expanded(
-                          child: ListView(
-                            children: [
-                              const Text("🎬 Video Formats (4K, 2K, 1080p, 720p, 480p, 360p)",
-                                  style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 15)),
-                              const SizedBox(height: 10),
-                              ...allVideoStreams.map((v) {
-                                final quality = v.videoQualityLabel;
-                                final mb = (v.size.totalBytes / (1024 * 1024)).toStringAsFixed(1);
-                                String badge = quality.contains("2160") ? "4K Ultra HD" : quality.contains("1440") ? "2K QHD" : quality.contains("1080") ? "FHD" : quality.contains("720") ? "HD" : "SD";
-                                return Card(
-                                  color: const Color(0xFF0F172A),
-                                  child: ListTile(
-                                    leading: const Icon(Icons.video_collection, color: Color(0xFFF59E0B)),
-                                    title: Text("$quality Video ($badge)", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                    subtitle: Text("Size: $mb MB • ${v.container.name.toUpperCase()}", style: const TextStyle(color: Colors.white60, fontSize: 12)),
-                                    trailing: const Icon(Icons.download_for_offline, color: Color(0xFF10B981), size: 28),
-                                    onTap: () {
-                                      String safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
-                                      if (safeTitle.length > 30) safeTitle = safeTitle.substring(0, 30);
-                                      String fileName = "${safeTitle}_$quality.${v.container.name}";
-                                      _startNewDownload(
-                                        videoId: video.id.value,
-                                        streamInfo: v,
-                                        title: video.title,
-                                        thumbnail: video.thumbnails.lowResUrl,
-                                        type: "Video ($quality)",
-                                        fileName: fileName,
-                                      );
-                                    },
-                                  ),
-                                );
-                              }).toList(),
-
-                              const SizedBox(height: 16),
-                              const Text("🎵 MP3 Audio (Original Sound)",
-                                  style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 15)),
-                              const SizedBox(height: 10),
-                              ...audioStreams.take(2).map((a) {
-                                final kbps = a.bitrate.kiloBitsPerSecond.round();
-                                final mb = (a.size.totalBytes / (1024 * 1024)).toStringAsFixed(1);
-                                return Card(
-                                  color: const Color(0xFF0F172A),
-                                  child: ListTile(
-                                    leading: const Icon(Icons.music_note, color: Color(0xFF10B981)),
-                                    title: Text("$kbps kbps MP3 Audio", style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                                    subtitle: Text("Size: $mb MB • Audio File", style: const TextStyle(color: Colors.white60, fontSize: 12)),
-                                    trailing: const Icon(Icons.download_for_offline, color: Color(0xFF10B981), size: 28),
-                                    onTap: () {
-                                      String safeTitle = video.title.replaceAll(RegExp(r'[\\/:*?"<>|]'), '');
-                                      if (safeTitle.length > 30) safeTitle = safeTitle.substring(0, 30);
-                                      String fileName = "${safeTitle}_${kbps}k.mp3";
-                                      _startNewDownload(
-                                        videoId: video.id.value,
-                                        streamInfo: a,
-                                        title: video.title,
-                                        thumbnail: video.thumbnails.lowResUrl,
-                                        type: "MP3 Audio",
-                                        fileName: fileName,
-                                      );
-                                    },
-                                  ),
-                                );
-                              }).toList(),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              );
-            }
-
             void _showSnack(String msg) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+              ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg), duration: const Duration(seconds: 2)));
             }
 
             @override
@@ -547,6 +610,8 @@ jobs:
 
             @override
             Widget build(BuildContext context) {
+              int activeCount = _tasks.where((t) => !t.isCompleted && !t.hasError && !t.isPaused).length;
+
               return Scaffold(
                 backgroundColor: const Color(0xFF0F172A),
                 appBar: AppBar(
@@ -556,18 +621,30 @@ jobs:
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: const [
                       Text("4everTube 2027 Pro", style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 18)),
-                      Text("4K Ultra HD & Multi-Queue Engine", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                      Text("Background Engine Active", style: TextStyle(color: Colors.white54, fontSize: 11)),
                     ],
                   ),
                   bottom: TabBar(
                     controller: _tabController,
                     indicatorColor: const Color(0xFFF59E0B),
-                    tabs: const [
-                      Tab(icon: Icon(Icons.download), text: "Downloader"),
-                      Tab(icon: Icon(Icons.folder_special), text: "Saved Files"),
+                    tabs: [
+                      Tab(
+                        icon: Badge(
+                          label: Text("$activeCount"),
+                          isLabelVisible: activeCount > 0,
+                          child: const Icon(Icons.flash_on),
+                        ),
+                        text: "Active Downloads",
+                      ),
+                      Tab(icon: const Icon(Icons.folder_special), text: "Saved Files"),
                     ],
                   ),
                   actions: [
+                    IconButton(
+                      tooltip: "Auto Resume / Reset",
+                      icon: const Icon(Icons.restart_alt, color: Color(0xFF10B981), size: 28),
+                      onPressed: _quickFixAndReset,
+                    ),
                     IconButton(
                       tooltip: "Helpline",
                       icon: const Icon(Icons.call, color: Color(0xFFF59E0B)),
@@ -578,9 +655,9 @@ jobs:
                 body: TabBarView(
                   controller: _tabController,
                   children: [
-                    // Tab 1: Downloader View
+                    // Tab 1: Active Downloads
                     Padding(
-                      padding: const EdgeInsets.all(14.0),
+                      padding: const EdgeInsets.all(12.0),
                       child: Column(
                         children: [
                           TextField(
@@ -589,7 +666,7 @@ jobs:
                             decoration: InputDecoration(
                               filled: true,
                               fillColor: const Color(0xFF1E293B),
-                              hintText: "YouTube / Shorts ka link paste ya share karein...",
+                              hintText: "Link paste karein ya direct Share karein...",
                               hintStyle: const TextStyle(color: Colors.white38, fontSize: 12),
                               suffixIcon: IconButton(
                                 icon: const Icon(Icons.clear, color: Colors.white38),
@@ -598,40 +675,41 @@ jobs:
                               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12), borderSide: BorderSide.none),
                             ),
                           ),
-                          const SizedBox(height: 10),
+                          const SizedBox(height: 8),
                           SizedBox(
                             width: double.infinity,
-                            height: 46,
+                            height: 45,
                             child: ElevatedButton.icon(
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: const Color(0xFFF59E0B),
                                 foregroundColor: Colors.black,
-                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                               ),
-                              onPressed: _isLoading ? null : () => _fetchMedia(),
-                              icon: const Icon(Icons.search),
-                              label: Text(_isLoading ? "Analyzing All Formats..." : "Get 4K / HD / MP3 Formats",
+                              onPressed: _isAnalyzing ? null : () => _fastAnalyzeLink(),
+                              icon: const Icon(Icons.bolt),
+                              label: Text(_isAnalyzing ? "Fast Decoding..." : "Instant Analyze Formats",
                                   style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                             ),
                           ),
                           const SizedBox(height: 12),
 
                           Expanded(
-                            child: _activeDownloads.isEmpty
-                                ? Center(
-                                    child: Text(_statusText, textAlign: TextAlign.center, style: const TextStyle(color: Colors.white54, fontSize: 13)),
+                            child: _tasks.isEmpty
+                                ? const Center(
+                                    child: Text("Koi active download nahi chal raha.\nYouTube se direct Share karein, popup khud khulega!",
+                                        textAlign: TextAlign.center, style: TextStyle(color: Colors.white38, fontSize: 13)),
                                   )
                                 : ListView.builder(
-                                    itemCount: _activeDownloads.length,
+                                    itemCount: _tasks.length,
                                     itemBuilder: (context, index) {
-                                      final task = _activeDownloads[index];
+                                      final t = _tasks[index];
                                       return Container(
-                                        margin: const EdgeInsets.only(bottom: 12),
+                                        margin: const EdgeInsets.only(bottom: 10),
                                         padding: const EdgeInsets.all(12),
                                         decoration: BoxDecoration(
                                           color: const Color(0xFF1E293B),
                                           borderRadius: BorderRadius.circular(12),
-                                          border: Border.all(color: task.isCompleted ? const Color(0xFF10B981) : Colors.white12),
+                                          border: Border.all(color: t.isCompleted ? const Color(0xFF10B981) : Colors.white12),
                                         ),
                                         child: Column(
                                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -641,11 +719,11 @@ jobs:
                                                 ClipRRect(
                                                   borderRadius: BorderRadius.circular(6),
                                                   child: Image.network(
-                                                    task.thumbnail,
-                                                    width: 65,
-                                                    height: 48,
+                                                    t.thumbnail,
+                                                    width: 60,
+                                                    height: 45,
                                                     fit: BoxFit.cover,
-                                                    errorBuilder: (c, e, s) => Container(width: 65, height: 48, color: Colors.black38, child: const Icon(Icons.movie, color: Colors.white54)),
+                                                    errorBuilder: (c, e, s) => Container(width: 60, height: 45, color: Colors.black26, child: const Icon(Icons.movie, color: Colors.white38)),
                                                   ),
                                                 ),
                                                 const SizedBox(width: 10),
@@ -653,89 +731,105 @@ jobs:
                                                   child: Column(
                                                     crossAxisAlignment: CrossAxisAlignment.start,
                                                     children: [
-                                                      Text(task.title, maxLines: 1, overflow: TextOverflow.ellipsis,
+                                                      Text(t.title, maxLines: 1, overflow: TextOverflow.ellipsis,
                                                           style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
                                                       const SizedBox(height: 3),
-                                                      Text("${task.type} • ${task.sizeInfo}",
+                                                      Text("${t.quality} • ${t.sizeInfo}",
                                                           style: const TextStyle(color: Colors.white60, fontSize: 11)),
                                                     ],
                                                   ),
                                                 ),
                                               ],
                                             ),
-                                            const SizedBox(height: 10),
+                                            const SizedBox(height: 8),
                                             LinearProgressIndicator(
-                                              value: task.progress,
-                                              color: task.isCompleted ? const Color(0xFF10B981) : const Color(0xFFF59E0B),
+                                              value: t.progress,
+                                              color: t.isCompleted ? const Color(0xFF10B981) : (t.hasError ? Colors.amber : const Color(0xFFF59E0B)),
                                               backgroundColor: Colors.white12,
                                               minHeight: 6,
                                             ),
-                                            const SizedBox(height: 8),
+                                            const SizedBox(height: 6),
                                             Row(
                                               mainAxisAlignment: MainAxisAlignment.spaceBetween,
                                               children: [
-                                                Text(task.isCompleted ? "Completed" : "${(task.progress * 100).toStringAsFixed(1)}% (${task.speed})",
-                                                    style: TextStyle(color: task.isCompleted ? const Color(0xFF10B981) : const Color(0xFFF59E0B), fontSize: 11, fontWeight: FontWeight.bold)),
-                                                Text(task.isCompleted ? "Saved" : "${task.eta} left",
+                                                Text(
+                                                  t.isCompleted
+                                                      ? "Complete"
+                                                      : (t.hasError ? "Connection Dropped (Tap Resume)" : "${(t.progress * 100).toStringAsFixed(1)}% (${t.speed})"),
+                                                  style: TextStyle(
+                                                    color: t.isCompleted ? const Color(0xFF10B981) : (t.hasError ? Colors.amber : const Color(0xFFF59E0B)),
+                                                    fontSize: 11,
+                                                    fontWeight: FontWeight.bold,
+                                                  ),
+                                                ),
+                                                Text(t.isCompleted ? "Saved" : "${t.eta} left",
                                                     style: const TextStyle(color: Colors.white54, fontSize: 11)),
                                               ],
                                             ),
-                                            const SizedBox(height: 8),
-                                            if (task.isCompleted) ...[
-                                              ElevatedButton.icon(
-                                                style: ElevatedButton.styleFrom(
-                                                  backgroundColor: const Color(0xFF10B981),
-                                                  foregroundColor: Colors.white,
-                                                  minimumSize: const Size(double.infinity, 38),
-                                                ),
-                                                onPressed: () => OpenFilex.open(task.filePath!),
-                                                icon: const Icon(Icons.play_circle_fill, size: 20),
-                                                label: const Text("Play Now"),
-                                              )
-                                            ] else ...[
-                                              Row(
-                                                mainAxisAlignment: MainAxisAlignment.end,
-                                                children: [
+                                            const SizedBox(height: 6),
+                                            Row(
+                                              mainAxisAlignment: MainAxisAlignment.end,
+                                              children: [
+                                                if (t.isCompleted) ...[
+                                                  ElevatedButton.icon(
+                                                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0xFF10B981), foregroundColor: Colors.white),
+                                                    onPressed: () => OpenFilex.open(t.filePath),
+                                                    icon: const Icon(Icons.play_circle_fill, size: 18),
+                                                    label: const Text("Play", style: TextStyle(fontSize: 12)),
+                                                  ),
+                                                  const SizedBox(width: 8),
+                                                  IconButton(
+                                                    icon: const Icon(Icons.delete, color: Colors.white38, size: 20),
+                                                    onPressed: () {
+                                                      setState(() {
+                                                        _tasks.remove(t);
+                                                      });
+                                                      _saveTasks();
+                                                    },
+                                                  )
+                                                ] else ...[
                                                   TextButton.icon(
                                                     style: TextButton.styleFrom(foregroundColor: Colors.white70),
                                                     onPressed: () {
-                                                      setState(() {
-                                                        task.isPaused = !task.isPaused;
-                                                      });
+                                                      if (t.hasError) {
+                                                        t.hasError = false;
+                                                        t.isPaused = false;
+                                                        _startPersistentStream(t);
+                                                      } else {
+                                                        setState(() {
+                                                          t.isPaused = !t.isPaused;
+                                                        });
+                                                      }
                                                     },
-                                                    icon: Icon(task.isPaused ? Icons.play_arrow : Icons.pause, size: 18),
-                                                    label: Text(task.isPaused ? "Resume" : "Pause", style: const TextStyle(fontSize: 12)),
+                                                    icon: Icon(t.isPaused || t.hasError ? Icons.play_arrow : Icons.pause, size: 18),
+                                                    label: Text(t.isPaused || t.hasError ? "Resume" : "Pause", style: const TextStyle(fontSize: 12)),
                                                   ),
                                                   TextButton.icon(
                                                     style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
                                                     onPressed: () {
                                                       setState(() {
-                                                        task.isCancelled = true;
+                                                        t.isCancelled = true;
                                                       });
                                                     },
                                                     icon: const Icon(Icons.close, size: 18),
                                                     label: const Text("Cancel", style: TextStyle(fontSize: 12)),
                                                   ),
                                                 ],
-                                              )
-                                            ]
+                                              ],
+                                            ),
                                           ],
                                         ),
                                       );
                                     },
                                   ),
                           ),
-
-                          const Text("Developed by 4ever technology • 03133796625",
-                              style: TextStyle(color: Colors.white38, fontSize: 11)),
-                          const SizedBox(height: 4),
                         ],
                       ),
                     ),
 
-                    // Tab 2: Saved Downloads View
+                    // Tab 2: Saved Files
                     RefreshIndicator(
-                      onRefresh: _loadDownloadedFiles,
+                      onRefresh: _loadSavedFiles,
                       child: _downloadedFiles.isEmpty
                           ? const Center(
                               child: Text("Koi file download nahi hui.", style: TextStyle(color: Colors.white38)),
@@ -750,12 +844,12 @@ jobs:
 
                                 return Card(
                                   color: const Color(0xFF1E293B),
-                                  margin: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                                  margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                                   child: ListTile(
                                     leading: Icon(
                                       isVideo ? Icons.video_file : Icons.audio_file,
                                       color: isVideo ? const Color(0xFFF59E0B) : const Color(0xFF10B981),
-                                      size: 36,
+                                      size: 34,
                                     ),
                                     title: Text(name, maxLines: 1, overflow: TextOverflow.ellipsis,
                                         style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 13)),
@@ -772,7 +866,7 @@ jobs:
                                           icon: const Icon(Icons.delete, color: Colors.redAccent),
                                           onPressed: () {
                                             file.deleteSync();
-                                            _loadDownloadedFiles();
+                                            _loadSavedFiles();
                                             _showSnack("File delete ho gayi");
                                           },
                                         ),
