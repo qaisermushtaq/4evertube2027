@@ -23,7 +23,7 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate & Build 4everTube 2027 Final Fix
+      - name: Generate & Build 4everTube 2027 Clean Build
         run: |
           flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
           cd app_project
@@ -117,13 +117,14 @@ jobs:
           </manifest>
           EOF
 
-          # Clean Flutter Source Code
+          # Error-Free Clean Flutter Code
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
           import 'dart:io';
           import 'package:flutter/material.dart';
           import 'package:flutter/services.dart';
+          import 'package:http/http.dart' as http_pkg;
           import 'package:open_filex/open_filex.dart';
           import 'package:path_provider/path_provider.dart';
           import 'package:permission_handler/permission_handler.dart';
@@ -372,7 +373,7 @@ jobs:
               }
 
               try {
-                final res = await http.post(
+                final res = await http_pkg.post(
                   Uri.parse("https://api.cobalt.tools/api/json"),
                   headers: {"Accept": "application/json", "Content-Type": "application/json"},
                   body: jsonEncode({"url": url, "vQuality": "max"}),
@@ -629,8 +630,8 @@ jobs:
                 int total = task.totalBytes;
 
                 if (task.directStreamUrl != null) {
-                  final req = http.Request('GET', Uri.parse(task.directStreamUrl!));
-                  final res = await http.Client().send(req);
+                  final req = http_pkg.Request('GET', Uri.parse(task.directStreamUrl!));
+                  final res = await http_pkg.Client().send(req);
                   stream = res.stream;
                   total = res.contentLength ?? task.totalBytes;
                 } else {
