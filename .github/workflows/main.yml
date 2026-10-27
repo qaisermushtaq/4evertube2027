@@ -23,7 +23,7 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Generate & Build 4everTube 2027 Clean Build
+      - name: Generate & Build 4everTube 2027 Watchdog Pro
         run: |
           flutter create --org com.technology4ever --project-name forevertube2027 --platforms=android app_project
           cd app_project
@@ -117,7 +117,7 @@ jobs:
           </manifest>
           EOF
 
-          # Error-Free Clean Flutter Code
+          # Watchdog Flutter Code
           cat << 'EOF' > lib/main.dart
           import 'dart:async';
           import 'dart:convert';
@@ -341,7 +341,7 @@ jobs:
                 }
               }
               _loadSavedFiles();
-              _showSnack("✅ Engine Reset! Pending tasks resumed.");
+              _showSnack("✅ Watchdog Reset! Tasks auto-resumed.");
             }
 
             Future<void> _fastAnalyzeLink([String? directUrl]) async {
@@ -386,7 +386,7 @@ jobs:
                     setState(() {
                       _isAnalyzing = false;
                     });
-                    _showDirectMirrorSheet(url, downloadUrl);
+                    _queueDirectUrlTask(title: "YouTube Video (HD)", directUrl: downloadUrl);
                     return;
                   }
                 }
@@ -518,46 +518,6 @@ jobs:
               );
             }
 
-            void _showDirectMirrorSheet(String originalUrl, String directUrl) {
-              showModalBottomSheet(
-                context: context,
-                backgroundColor: const Color(0xFF1E293B),
-                shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-                builder: (context) {
-                  return Container(
-                    padding: const EdgeInsets.all(16),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text("⚡ High-Speed Turbo Stream Ready",
-                            style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 16)),
-                        const SizedBox(height: 6),
-                        const Text("Cloud mirror decoders ne video successfully extract kar li hai.",
-                            style: TextStyle(color: Colors.white70, fontSize: 13)),
-                        const SizedBox(height: 18),
-                        ElevatedButton.icon(
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFF59E0B),
-                            foregroundColor: Colors.black,
-                            minimumSize: const Size(double.infinity, 45),
-                          ),
-                          onPressed: () {
-                            Navigator.pop(context);
-                            _urlController.clear();
-                            _queueDirectUrlTask(title: "YouTube Video (HD)", directUrl: directUrl);
-                          },
-                          icon: const Icon(Icons.download),
-                          label: const Text("Download MP4 (Original HD)", style: TextStyle(fontWeight: FontWeight.bold)),
-                        ),
-                        const SizedBox(height: 10),
-                      ],
-                    ),
-                  );
-                },
-              );
-            }
-
             Future<void> _queueNewTask({
               required String title,
               required String thumbnail,
@@ -621,100 +581,137 @@ jobs:
               _startPersistentStream(task);
             }
 
+            // Watchdog Stream Engine with Auto-Resume on 71% stall
             void _startPersistentStream(DownloadItem task) async {
               final file = File(task.filePath);
               final yt = YoutubeExplode();
 
-              try {
-                Stream<List<int>> stream;
-                int total = task.totalBytes;
+              int retryCount = 0;
+              const int maxRetries = 3;
 
-                if (task.directStreamUrl != null) {
-                  final req = http_pkg.Request('GET', Uri.parse(task.directStreamUrl!));
-                  final res = await http_pkg.Client().send(req);
-                  stream = res.stream;
-                  total = res.contentLength ?? task.totalBytes;
-                } else {
-                  final manifest = await yt.videos.streamsClient.getManifest(task.videoId);
-                  StreamInfo? streamInfo;
-                  if (task.isAudio) {
-                    streamInfo = manifest.audioOnly.sortByBitrate().first;
+              while (retryCount < maxRetries && !task.isCancelled && !task.isCompleted) {
+                try {
+                  Stream<List<int>> stream;
+                  int total = task.totalBytes;
+
+                  if (task.directStreamUrl != null) {
+                    int existingBytes = file.existsSync() ? file.lengthSync() : 0;
+                    final req = http_pkg.Request('GET', Uri.parse(task.directStreamUrl!));
+                    if (existingBytes > 0) {
+                      req.headers['Range'] = 'bytes=$existingBytes-';
+                    }
+                    final res = await http_pkg.Client().send(req);
+                    stream = res.stream;
+                    total = (res.contentLength ?? task.totalBytes) + existingBytes;
                   } else {
-                    streamInfo = manifest.video.sortByVideoQuality().firstWhere(
-                      (s) => task.quality.contains(s.videoQualityLabel),
-                      orElse: () => manifest.video.sortByVideoQuality().first,
-                    );
+                    int existingBytes = file.existsSync() ? file.lengthSync() : 0;
+                    final manifest = await yt.videos.streamsClient.getManifest(task.videoId);
+                    StreamInfo? streamInfo;
+                    if (task.isAudio) {
+                      streamInfo = manifest.audioOnly.sortByBitrate().first;
+                    } else {
+                      streamInfo = manifest.video.sortByVideoQuality().firstWhere(
+                        (s) => task.quality.contains(s.videoQualityLabel),
+                        orElse: () => manifest.video.sortByVideoQuality().first,
+                      );
+                    }
+                    
+                    // Range request for seamless resume if stalled
+                    var httpClient = http_pkg.Client();
+                    var request = http_pkg.Request('GET', streamInfo.url);
+                    if (existingBytes > 0 && existingBytes < streamInfo.size.totalBytes) {
+                      request.headers['Range'] = 'bytes=$existingBytes-';
+                    }
+                    var response = await httpClient.send(request);
+                    stream = response.stream;
+                    total = streamInfo.size.totalBytes;
                   }
-                  stream = yt.videos.streamsClient.get(streamInfo);
-                  total = streamInfo.size.totalBytes;
-                }
 
-                final output = file.openWrite(mode: FileMode.writeOnlyAppend);
-                int received = file.existsSync() ? file.lengthSync() : 0;
-                final stopwatch = Stopwatch()..start();
-                int lastBytes = received;
-                int lastTime = 0;
+                  final output = file.openWrite(mode: FileMode.writeOnlyAppend);
+                  int received = file.existsSync() ? file.lengthSync() : 0;
+                  final stopwatch = Stopwatch()..start();
+                  int lastBytes = received;
+                  int lastTime = 0;
+                  int stallTimer = 0;
 
-                await for (final chunk in stream) {
-                  if (task.isCancelled) {
-                    await output.close();
-                    if (file.existsSync()) file.deleteSync();
+                  await for (final chunk in stream) {
+                    if (task.isCancelled) {
+                      await output.close();
+                      if (file.existsSync()) file.deleteSync();
+                      setState(() {
+                        _tasks.remove(task);
+                      });
+                      _saveTasks();
+                      yt.close();
+                      return;
+                    }
+
+                    while (task.isPaused) {
+                      await Future.delayed(const Duration(milliseconds: 250));
+                      if (task.isCancelled) break;
+                    }
+
+                    output.add(chunk);
+                    received += chunk.length;
+
+                    int elapsed = stopwatch.elapsedMilliseconds;
+                    if (elapsed - lastTime >= 350) {
+                      if (received == lastBytes) {
+                        stallTimer++;
+                        if (stallTimer > 10) {
+                          // If stuck for ~3.5 seconds, break to auto-retry range request
+                          break;
+                        }
+                      } else {
+                        stallTimer = 0;
+                      }
+
+                      double speedBytesPerSec = ((received - lastBytes) / ((elapsed - lastTime) / 1000));
+                      double speedMB = speedBytesPerSec / (1024 * 1024);
+                      int remainingBytes = total > received ? (total - received) : 0;
+                      int etaSec = speedBytesPerSec > 0 ? (remainingBytes / speedBytesPerSec).round() : 0;
+
+                      setState(() {
+                        task.progress = total > 0 ? (received / total) : 0.5;
+                        task.sizeInfo = "${(received / (1024 * 1024)).toStringAsFixed(1)}MB / ${(total / (1024 * 1024)).toStringAsFixed(1)}MB";
+                        task.speed = speedMB > 0 ? "${speedMB.toStringAsFixed(2)} MB/s" : "Buffering...";
+                        task.eta = etaSec > 60 ? "${(etaSec / 60).toStringAsFixed(0)}m ${etaSec % 60}s" : "${etaSec}s";
+                      });
+
+                      lastBytes = received;
+                      lastTime = elapsed;
+                    }
+                  }
+
+                  await output.flush();
+                  await output.close();
+                  stopwatch.stop();
+
+                  if (received >= total * 0.98) {
                     setState(() {
-                      _tasks.remove(task);
+                      task.isCompleted = true;
+                      task.progress = 1.0;
+                      task.speed = "Complete";
+                      task.eta = "0s";
                     });
                     _saveTasks();
+                    _loadSavedFiles();
                     yt.close();
                     return;
                   }
-
-                  while (task.isPaused) {
-                    await Future.delayed(const Duration(milliseconds: 250));
-                    if (task.isCancelled) break;
-                  }
-
-                  output.add(chunk);
-                  received += chunk.length;
-
-                  int elapsed = stopwatch.elapsedMilliseconds;
-                  if (elapsed - lastTime >= 350) {
-                    double speedBytesPerSec = ((received - lastBytes) / ((elapsed - lastTime) / 1000));
-                    double speedMB = speedBytesPerSec / (1024 * 1024);
-                    int remainingBytes = total > received ? (total - received) : 0;
-                    int etaSec = speedBytesPerSec > 0 ? (remainingBytes / speedBytesPerSec).round() : 0;
-
-                    setState(() {
-                      task.progress = total > 0 ? (received / total) : 0.5;
-                      task.sizeInfo = "${(received / (1024 * 1024)).toStringAsFixed(1)}MB / ${(total / (1024 * 1024)).toStringAsFixed(1)}MB";
-                      task.speed = "${speedMB.toStringAsFixed(2)} MB/s";
-                      task.eta = etaSec > 60 ? "${(etaSec / 60).toStringAsFixed(0)}m ${etaSec % 60}s" : "${etaSec}s";
-                    });
-
-                    lastBytes = received;
-                    lastTime = elapsed;
-                  }
+                } catch (_) {
+                  retryCount++;
+                  await Future.delayed(const Duration(seconds: 2));
                 }
+              }
 
-                await output.flush();
-                await output.close();
-                stopwatch.stop();
-
-                setState(() {
-                  task.isCompleted = true;
-                  task.progress = 1.0;
-                  task.speed = "Complete";
-                  task.eta = "0s";
-                });
-
-                _saveTasks();
-                _loadSavedFiles();
-              } catch (e) {
+              yt.close();
+              if (!task.isCompleted) {
                 setState(() {
                   task.hasError = true;
-                  task.speed = "Paused";
+                  task.speed = "Paused / Tap Resume";
                 });
                 _saveTasks();
-              } finally {
-                yt.close();
               }
             }
 
@@ -743,7 +740,7 @@ jobs:
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: const [
                       Text("4everTube 2027 Pro", style: TextStyle(color: Color(0xFFF59E0B), fontWeight: FontWeight.bold, fontSize: 18)),
-                      Text("Double-Layer Engine Active", style: TextStyle(color: Colors.white54, fontSize: 11)),
+                      Text("Watchdog Engine Active", style: TextStyle(color: Colors.white54, fontSize: 11)),
                     ],
                   ),
                   bottom: TabBar(
@@ -876,7 +873,7 @@ jobs:
                                                 Text(
                                                   t.isCompleted
                                                       ? "Complete"
-                                                      : (t.hasError ? "Connection Dropped (Tap Resume)" : "${(t.progress * 100).toStringAsFixed(1)}% (${t.speed})"),
+                                                      : (t.hasError ? "Stalled (Tap Resume)" : "${(t.progress * 100).toStringAsFixed(1)}% (${t.speed})"),
                                                   style: TextStyle(
                                                     color: t.isCompleted ? const Color(0xFF10B981) : (t.hasError ? Colors.amber : const Color(0xFFF59E0B)),
                                                     fontSize: 11,
@@ -912,18 +909,12 @@ jobs:
                                                   TextButton.icon(
                                                     style: TextButton.styleFrom(foregroundColor: Colors.white70),
                                                     onPressed: () {
-                                                      if (t.hasError) {
-                                                        t.hasError = false;
-                                                        t.isPaused = false;
-                                                        _startPersistentStream(t);
-                                                      } else {
-                                                        setState(() {
-                                                          t.isPaused = !t.isPaused;
-                                                        });
-                                                      }
+                                                      t.hasError = false;
+                                                      t.isPaused = false;
+                                                      _startPersistentStream(t);
                                                     },
-                                                    icon: Icon(t.isPaused || t.hasError ? Icons.play_arrow : Icons.pause, size: 18),
-                                                    label: Text(t.isPaused || t.hasError ? "Resume" : "Pause", style: const TextStyle(fontSize: 12)),
+                                                    icon: const Icon(Icons.play_arrow, size: 18),
+                                                    label: const Text("Resume", style: TextStyle(fontSize: 12)),
                                                   ),
                                                   TextButton.icon(
                                                     style: TextButton.styleFrom(foregroundColor: Colors.redAccent),
